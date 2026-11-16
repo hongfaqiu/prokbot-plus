@@ -3,6 +3,8 @@ import { chatReasoning } from './openai-chat.mjs';
 import { claudeTraits } from './anthropic-messages.mjs';
 export const TIERS = ['routine', 'reasoning', 'expert'];
 export const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+export const MAX_CATALOG_MODELS = 200;
+export const MAX_POLICY_MODELS = 250;
 /** Reference levels for well-known model families; a provider catalog overrides them. */
 export function effortLevels(model) {
   const id = String(model).toLowerCase();
@@ -32,7 +34,7 @@ export function validatePolicy(value, model) {
   const fail = message => { throw new TypeError(message); };
   const policy = value ?? defaultPolicy(model);
   if (!['manual', 'adaptive'].includes(policy.mode)) fail('Invalid routing mode');
-  if (!Array.isArray(policy.models) || policy.models.length > 100) fail('Invalid model catalog');
+  if (!Array.isArray(policy.models) || policy.models.length > MAX_POLICY_MODELS) fail('Invalid model catalog');
   const models = policy.models.map(item => {
     if (typeof item.id !== 'string' || !item.id.trim() || item.id.length > 256 || /[\r\n\0]/.test(item.id)) fail('Invalid model ID');
     if (!Array.isArray(item.efforts) || item.efforts.some(effort => !EFFORTS.includes(effort))) fail('Invalid effort levels');

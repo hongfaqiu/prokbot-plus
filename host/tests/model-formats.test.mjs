@@ -5,7 +5,7 @@ import { rejectedOption, deletePath, reasoningProviderOptions } from '../runtime
 import { anthropicEndpoint, anthropicOptions, convertAnthropicMessages } from '../runtime/anthropic-messages.mjs';
 import { convertResponsesInput, responsesOptions } from '../runtime/openai-responses.mjs';
 import { convertChatMessages, maxTokensParameter } from '../runtime/openai-chat.mjs';
-import { effortLevels } from '../runtime/model-policy.mjs';
+import { effortLevels, MAX_CATALOG_MODELS, MAX_POLICY_MODELS, validatePolicy } from '../runtime/model-policy.mjs';
 
 const anthropicTag = model => ({ providerOptions: reasoningProviderOptions({ format: 'anthropic', model }) });
 const responsesTag = (model, itemId) => ({ providerOptions: reasoningProviderOptions({ format: 'openai-responses', model, summarized: true, itemId }) });
@@ -328,4 +328,19 @@ test('encrypted reasoning without a summary is kept as a redacted part and repla
   assert.equal(redacted.type, 'redacted-reasoning');
   const { input } = convertResponsesInput([{ role: 'user', content: 'a' }, { role: 'assistant', content: [redacted, { type: 'text', text: 'ok' }] }], { model: 'gpt-5.5' });
   assert.deepEqual(input[1], { type: 'reasoning', id: 'rs_9', summary: [], encrypted_content: 'enc-9' });
+});
+
+test('validatePolicy accepts full fetched catalog up to MAX_CATALOG_MODELS and rejects over MAX_POLICY_MODELS', () => {
+  const catalogModels = Array.from({ length: MAX_CATALOG_MODELS }, (_, index) => ({ id: `model-${index}`, efforts: [] }));
+  const primary = catalogModels[0].id;
+  const routes = {
+    routine: { model: primary, effort: 'auto' },
+    reasoning: { model: primary, effort: 'auto' },
+    expert: { model: primary, effort: 'auto' },
+  };
+  const policy = validatePolicy({ mode: 'manual', effort: 'default', models: catalogModels, routes }, primary);
+  assert.equal(policy.models.length, MAX_CATALOG_MODELS);
+
+  const oversized = Array.from({ length: MAX_POLICY_MODELS + 1 }, (_, index) => ({ id: `model-${index}`, efforts: [] }));
+  assert.throws(() => validatePolicy({ mode: 'manual', effort: 'default', models: oversized, routes }, primary), /Invalid model catalog/);
 });

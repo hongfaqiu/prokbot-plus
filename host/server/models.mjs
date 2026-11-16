@@ -1,4 +1,4 @@
-import { parseModelPolicy, defaultPolicy, validatePolicy, effortLevels, EFFORTS } from '../runtime/model-policy.mjs';
+import { parseModelPolicy, defaultPolicy, validatePolicy, effortLevels, EFFORTS, MAX_CATALOG_MODELS } from '../runtime/model-policy.mjs';
 import { createModelRouter } from '../runtime/model-router.mjs';
 import { anthropicEndpoint, anthropicHeaders } from '../runtime/anthropic-messages.mjs';
 import { API_FORMATS, createModelSession } from '../runtime/model-session.mjs';
@@ -174,12 +174,22 @@ export class Models {
     check(response.ok, 502, `Model catalog HTTP ${response.status}`);
     const body = await response.json();
     check(Array.isArray(body.data), 502, '模型列表格式不兼容');
-    return { models: body.data.filter(item => typeof item.id === 'string').slice(0, 200).map(item => {
+    const seen = new Set();
+    const entries = [];
+    for (const item of body.data) {
+      if (typeof item?.id !== 'string') continue;
+      const id = item.id.trim();
+      if (!id || id.length > 256 || /[\r\n\0]/.test(id) || seen.has(id)) continue;
+      seen.add(id);
+      entries.push({ item, id });
+      if (entries.length >= MAX_CATALOG_MODELS) break;
+    }
+    return { models: entries.map(({ item, id }) => {
       const supplied = item.supported_reasoning_efforts ?? item.supported_efforts ?? item.reasoning_effort?.values ?? item.capabilities?.reasoning_efforts;
       const levels = Array.isArray(supplied) ? EFFORTS.filter(level => supplied.includes(level)) : null;
       // Context capacity as reported by OpenAI-style and Anthropic catalogs.
       const capacity = [item.context_window, item.max_input_tokens, item.context_length].find(value => Number.isSafeInteger(value) && value > 0 && value <= 100_000_000);
-      return { id: item.id, efforts: levels ?? effortLevels(item.id), source: levels ? 'provider' : effortLevels(item.id).length ? 'reference' : 'manual',
+      return { id, efforts: levels ?? effortLevels(id), source: levels ? 'provider' : effortLevels(id).length ? 'reference' : 'manual',
         ...(capacity ? { contextWindowTokens: capacity } : {}) };
     }) };
   }
