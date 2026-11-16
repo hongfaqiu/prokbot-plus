@@ -9,7 +9,7 @@ Windows · macOS · iOS client patches ｜ [Our own Android app (unofficial)](#a
 <p>
 <!-- client-badges:start -->
   <a href="#client-versions"><img alt="Windows official 1.1.0 x64" src="https://img.shields.io/badge/Windows%20official-1.1.0%20x64-0078D4?logo=windows&logoColor=white"></a>
-  <a href="#client-versions"><img alt="Windows patch accepts only 1.1.0 x64" src="https://img.shields.io/badge/Windows%20patch%20accepts%20only-1.1.0%20x64-237E55?logo=windows&logoColor=white"></a>
+  <a href="#client-versions"><img alt="Windows patch accepts 1.1.0 x64 (recommended), 0.71.2" src="https://img.shields.io/badge/Windows%20patch%20accepts-1.1.0%20x64%20(recommended)%2C%200.71.2-237E55?logo=windows&logoColor=white"></a>
   <a href="#client-versions"><img alt="macOS official 1.1.0 ARM64" src="https://img.shields.io/badge/macOS%20official-1.1.0%20ARM64-111111?logo=apple&logoColor=white"></a>
   <a href="#client-versions"><img alt="iOS official 1.25.0" src="https://img.shields.io/badge/iOS%20official-1.25.0-111111?logo=apple&logoColor=white"></a>
   <a href="#client-versions"><img alt="Android shell 1.2.1" src="https://img.shields.io/badge/Unofficial%20Android-1.2.1-237E55?logo=android&logoColor=white"></a>
@@ -103,14 +103,14 @@ See the [AI deployment guide](docs/AI-INSTALL.en.md#choose-a-deployment) for the
 
 <a id="client-versions"></a>
 <!-- client-versions:start -->
-**Which official version should I download?** The one in the right column; the patches accept only those versions. The left column is the latest official release (checked 2026-11-14); when it is newer, wait until this project supports it.
+**Which official version should I download?** The one in the right column; the patches accept only those versions. Where two versions are listed, use the recommended newer one first and switch to the older one only if it does not work. The left column is the latest official release (checked 2026-11-14); when it is newer, wait until this project supports it.
 
 | Platform | Latest official | Version this project needs |
 | --- | --- | --- |
-| Windows x64 | [1.1.0](https://api2.cursor.sh/updates/api/download/stable/win32-x64-user/sand) | 1.1.0 |
-| macOS ARM64 | [1.1.0](https://api2.cursor.sh/updates/api/download/stable/darwin-arm64/sand) | 0.71.2 (not tested on a Mac) |
+| Windows x64 | [1.1.0](https://api2.cursor.sh/updates/api/download/stable/win32-x64-user/sand) | **1.1.0** (recommended); 0.71.2 if it does not work |
+| macOS ARM64 | [1.1.0](https://api2.cursor.sh/updates/api/download/stable/darwin-arm64/sand) | 0.71.2 (not yet adapted to 1.1.0; not tested on a Mac) |
 | iOS | [1.25.0](https://apps.apple.com/us/app/grok-bot/id6794501026) | 1.16.0 (build 23152; not tested on an iPhone or iPad) |
-| Android 9+ (unofficial) | Does not use the official Android app | App **1.2.1** (build 10201), interface taken from the Windows **0.71.2** installer |
+| Android 9+ (unofficial) | Does not use the official Android app | App **1.2.1** (build 10201), interface taken from the Windows **1.1.0** installer (recommended; 0.71.2 if it does not work) |
 | Linux server | n/a | Host `d0a4baa`; Bot computer `9d2ac1b` (x86_64) |
 
 ProkBot Plus has its own version numbers; see the [latest release](https://github.com/ferretgeek/prokbot-plus/releases/latest). The upstream ProkBot baseline is `3e9fe8c`.
@@ -118,9 +118,9 @@ ProkBot Plus has its own version numbers; see the [latest release](https://githu
 
 | Client | Requirements | Testing |
 | --- | --- | --- |
-| Windows | Windows 10 / 11 x64 | New in Plus. Tested on Windows 11: pairing, multi-turn chat, attachments, search, local commands, notifications and reading history back after a restart. Comes as a portable version and an installer; no administrator rights needed. |
-| Android | Android 9+, system WebView 89+ (111+ recommended) | Our own app, not the official Android app. Tested on Android 15 / 16 emulators: pairing, multi-turn real chats, reading history back and the notification permission. Not yet tested on a real phone. |
-| Mac | Apple Silicon | Patch from upstream. The code shared with Windows is tested; this project has not tested it on a real Mac. |
+| Windows | Windows 10 / 11 x64 | New in Plus. Tested on Windows 11: pairing, multi-turn chat, attachments, search, local commands, notifications and reading history back after a restart; the 0.71.2 fallback was also tested for pairing and chat. Comes as a portable version and an installer; no administrator rights needed. |
+| Android | Android 9+, system WebView 89+ (111+ recommended) | Our own app, not the official Android app. Tested on Android 15 / 16 emulators: pairing, multi-turn real chats, reading history back and the notification permission. The 1.1.0 interface was also tested for the Bot computer view, images, search, dark mode and an older WebView. Not yet tested on a real phone. |
+| Mac | Apple Silicon | Patch from upstream, still on the official 0.71.2: the Mac app is a separate package, so moving to 1.1.0 needs its own patch and testing on a Mac, which the maintainers don't have. The code shared with Windows is tested; this project has not tested it on a real Mac. |
 | iPhone / iPad | Your own decrypted IPA and signing certificate | Patch from upstream. The patch tool is tested; this project has not tested it on an iPhone or iPad. |
 | Linux desktop | — | No patch from this project. The official [Linux client](https://docs.x.ai/grok-bot/deployment) exists, but it is not the same thing as the Bot's Linux computer on the server. |
 
@@ -155,7 +155,7 @@ Downloads: the [latest release](https://github.com/ferretgeek/prokbot-plus/relea
   </tr>
 </table>
 
-Upstream has only Mac and iOS. The Windows version is built by patching the official Windows 1.1.0 installer, and its interface is the official Windows one:
+Upstream has only Mac and iOS. The Windows version is built by patching the official Windows 1.1.0 installer (0.71.2 if 1.1.0 does not work for you), and its interface is that of the matching official Windows release:
 
 - Stays in the system tray; system notifications, attachments, message search, Tailcat;
 - Runs local commands (PowerShell, Chinese output is not garbled), and can hand complex coding work to Codex on your computer;
@@ -171,7 +171,7 @@ Upstream has only Mac and iOS. The Windows version is built by patching the offi
 </p>
 <p align="center"><sub>Captured on an Android 15 emulator. Both replies were generated by the model connected to the self-hosted Host.</sub></p>
 
-The official Android app has tamper protection and can't be modified. Plus takes another route: it puts the official desktop interface (taken from the official Windows installer you download yourself) into an Android shell written for this project, and builds an APK.
+The official Android app has tamper protection and can't be modified. Plus takes another route: it puts the official desktop interface (taken from the official Windows installer you download yourself: 1.1.0 recommended, 0.71.2 if it does not work) into an Android shell written for this project, and builds an APK.
 
 - Conversations, Bot management, skills, the library, routines and settings are the original interface, laid out like the official phone app: the Bot list and a conversation are separate screens, and the floating buttons, bubbles, colors and typeface match the official phone app, with the back gesture and dark mode;
 - Watch the Bot's computer live on the phone, and use touch and the keyboard after "Take control";

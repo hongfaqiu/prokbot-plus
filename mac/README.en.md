@@ -14,6 +14,8 @@ node patchers/desktop/patch.mjs
 
 Automatically downloads and verifies the 0.71.2 Apple Silicon original, then generates `output.noindex/Grok Bot.app`. Move it into Applications and enter your Host address and six-character pairing code.
 
+The official Mac app has moved to 1.1.0, but this patch stays on 0.71.2. The Windows 1.1.0 patch does not carry over: the Mac app is a separate package that needs its own patch and testing of installation, signing and local graphical control on a Mac, which the maintainers don't have. 0.71.2 can still be downloaded from the official address, and the patcher checks its full digest.
+
 To use an existing `.app` or `.dmg`, add `--source "/path/to/Grok Bot.app"`.
 
 `--verify-only` replays the fixed recipes in temporary storage without building a client. A supplied DMG must match the full archive SHA-256, and the Mac tool verifies the input app's signature. No Mac hardware was available for this round: installation, launch, pairing and chat on macOS were not tested. See the [version table](../README.en.md#client-versions) for accepted inputs versus official releases.

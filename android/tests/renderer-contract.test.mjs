@@ -7,8 +7,8 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import vm from 'node:vm';
 import { gunzipSync } from 'node:zlib';
-import { androidIndexHtml, preloadMethods, wrapPreload, wrapVncPreload } from '../patchers/patch.mjs';
-import { applyPinnedRendererPatch, RENDERER_PATCHES } from '../patchers/renderer-patches.mjs';
+import { androidIndexHtml, androidRenderers, preloadEdges, preloadMethods, wrapPreload, wrapVncPreload } from '../patchers/patch.mjs';
+import { applyPinnedRendererPatch, rendererPatches, RENDERER_PATCHES } from '../patchers/renderer-patches.mjs';
 import { windowsInputs } from '../../windows/patchers/desktop/inputs.mjs';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -18,34 +18,45 @@ const desktop = new URL('../../mac/clients/desktop/', import.meta.url);
 
 test('Android input pins refer to the correct side of each Windows recipe', async () => {
   const android = await json(new URL('../patchers/supported.json', import.meta.url));
-  const { directory, supported } = await windowsInputs(android.desktopVersion);
-  const windows = pathToFileURL(join(directory, '/'));
-  const manifest = await json(new URL('recipes/manifest.json', windows));
-  const inputs = [
-    ['dist/renderer/index.html', 'windows-recipe', android.rendererIndexSha256],
-    ['dist/electron-preload/preload.cjs', 'windows-recipe', android.preloadSha256],
-    ['dist/electron-preload/preload-vnc.cjs', 'original', android.vncPreloadSha256],
-    ...RENDERER_PATCHES.map(p => [`dist/renderer/${p.file}`, p.input, p.sha256]),
-  ];
-  assert.ok(RENDERER_PATCHES.length > 0);
-  assert.equal(new Set(inputs.map(([path]) => path)).size, inputs.length);
-  for (const [path, input, pin] of inputs) {
-    assert.match(pin, /^[a-f0-9]{64}$/, path);
-    const matches = manifest.files.filter(entry => entry.path === path);
-    if (input === 'original') {
-      assert.equal(matches.length, 0, `Windows now rewrites ${path}`);
-      continue; // Only the user's verified original can prove an untouched asset's bytes.
+  const builds = androidRenderers(android);
+  assert.deepEqual(builds.map(build => build.desktopVersion), ['1.1.0', '0.71.2']);
+  assert.deepEqual(Object.keys(RENDERER_PATCHES).sort(), builds.map(build => build.desktopVersion).sort());
+  for (const build of builds) {
+    const { directory, supported } = await windowsInputs(build.desktopVersion);
+    assert.equal(supported.version, build.desktopVersion);
+    const windows = pathToFileURL(join(directory, '/'));
+    const manifest = await json(new URL('recipes/manifest.json', windows));
+    const patches = rendererPatches(build.desktopVersion);
+    const produced = path => manifest.files.some(entry => entry.path === path) ? 'windows-recipe' : 'original';
+    const inputs = [
+      ['dist/renderer/index.html', 'windows-recipe', build.rendererIndexSha256],
+      ['dist/electron-preload/preload.cjs', produced('dist/electron-preload/preload.cjs'), build.preloadSha256],
+      ['dist/electron-preload/preload-vnc.cjs', 'original', build.vncPreloadSha256],
+      ...patches.map(p => [`dist/renderer/${p.file}`, p.input, p.sha256]),
+    ];
+    assert.ok(patches.length > 0);
+    assert.equal(new Set(inputs.map(([path]) => path)).size, inputs.length);
+    for (const [path, input, pin] of inputs) {
+      const where = `${build.desktopVersion} ${path}`;
+      assert.match(pin, /^[a-f0-9]{64}$/, where);
+      const matches = manifest.files.filter(entry => entry.path === path);
+      if (input === 'original') {
+        assert.equal(matches.length, 0, `Windows now rewrites ${where}`);
+        // The original preload is pinned by the Windows release; other untouched assets only by the user's verified original.
+        if (path === 'dist/electron-preload/preload.cjs') assert.equal(pin, supported.preloadSha256, where);
+        continue;
+      }
+      assert.equal(input, 'windows-recipe', where);
+      assert.equal(matches.length, 1, `missing or duplicate producer: ${where}`);
+      const [entry] = matches;
+      assert.match(entry.recipe, /^[\w.-]+\.gz$/);
+      const bytes = await readFile(new URL(`recipes/${entry.recipe}`, windows));
+      assert.equal(sha(bytes), entry.sha256, entry.recipe);
+      const recipe = JSON.parse(gunzipSync(bytes, { maxOutputLength: 64 * 1024 * 1024 }));
+      assert.equal(recipe.schema, 'grokbot-bytepatch/v1');
+      assert.equal(recipe.targetSha256, pin, `stale Android input: ${where}`);
+      if (path === 'dist/electron-preload/preload.cjs') assert.equal(recipe.sourceSha256, supported.preloadSha256);
     }
-    assert.equal(input, 'windows-recipe', path);
-    assert.equal(matches.length, 1, `missing or duplicate producer: ${path}`);
-    const [entry] = matches;
-    assert.match(entry.recipe, /^[\w.-]+\.gz$/);
-    const bytes = await readFile(new URL(`recipes/${entry.recipe}`, windows));
-    assert.equal(sha(bytes), entry.sha256, entry.recipe);
-    const recipe = JSON.parse(gunzipSync(bytes, { maxOutputLength: 64 * 1024 * 1024 }));
-    assert.equal(recipe.schema, 'grokbot-bytepatch/v1');
-    assert.equal(recipe.targetSha256, pin, `stale Android input: ${path}`);
-    if (path === 'dist/electron-preload/preload.cjs') assert.equal(recipe.sourceSha256, supported.preloadSha256);
   }
 });
 
@@ -105,7 +116,12 @@ const fixturePreload = `
   world.exposeInMainWorld('coordinatorPort', { open: () => new Promise((resolve, reject) => {
     ipc.once('sand:coordinator-port', event => resolve(event.ports[0]));
     ipc.invoke('sand:coordinator-port-request').catch(reject);
-  }) });`;
+  }) });
+  const edge = (name, spec) => ({
+    probe: method => ipc.invoke('dune-rpc:' + name + ':probe', method),
+    call: (method, args) => ipc.invoke('dune-rpc:' + name + ':m:' + method, args),
+  });
+  world.exposeInMainWorld('spotlight', edge("spotlight",{methods:{closeSpotlight:t().noArgs}}));`;
 
 async function stageBridge(t) {
   const dir = await mkdtemp(join(tmpdir(), 'prokbot-renderer-contract-'));
@@ -114,7 +130,7 @@ async function stageBridge(t) {
   await writeFile(join(dir, 'package.json'), '{"type":"module"}');
   for (const name of ['bridge.js', 'native.js', 'services.js', 'gateway.js', 'layout.js', 'webview.js', 'anchor-fallback.js'])
     await copyFile(new URL(name, client), join(dir, name));
-  for (const name of ['i18n.mjs', 'connectors.mjs', 'external-url.mjs'])
+  for (const name of ['i18n.mjs', 'connectors.mjs', 'external-url.mjs', 'dictation.mjs'])
     await copyFile(new URL(name, desktop), join(dir, 'desktop', name));
   await writeFile(join(dir, 'official-preload.js'), wrapPreload(fixturePreload));
   return pathToFileURL(join(dir, 'bridge.js')).href;
@@ -130,6 +146,7 @@ function provideGlobals(t, values) {
 
 test('project bridge serves a boot snapshot, RPC outcomes and a protocol-v3 coordinator port', { timeout: 5000 }, async t => {
   assert.deepEqual(preloadMethods(fixturePreload), ['getThemeState', 'setThemePreference']);
+  assert.deepEqual(preloadEdges(fixturePreload), { spotlight: ['closeSpotlight'] });
   const entry = await stageBridge(t);
   const events = new EventTarget(), window = {};
   provideGlobals(t, {
@@ -164,6 +181,9 @@ test('project bridge serves a boot snapshot, RPC outcomes and a protocol-v3 coor
   const denied = await api.call('setThemePreference', { preference: 'invalid' });
   assert.equal(denied.ok, false);
   assert.equal(denied.failure.code, 'edge/handler-failed');
+  // Panels on other edges belong to official desktop windows; the phone reports them as absent.
+  assert.deepEqual(await window.spotlight.probe('closeSpotlight'), { ok: true, value: false });
+  assert.equal((await window.spotlight.call('closeSpotlight')).failure.code, 'edge/unknown-method');
   const opening = window.coordinatorPort.open();
   t.mock.timers.tick(0);
   const port = await opening;
@@ -184,12 +204,16 @@ test('VNC preload IPC accepts only the workspace parent at its assigned origin',
   const parent = { postMessage: (value, target) => messages.push({ target, ...structuredClone(value) }) };
   let receive;
   const window = { parent, __grokbotAppOrigin: origin, addEventListener: (type, fn) => { if (type === 'message') receive = fn; } };
-  const document = Object.assign(new EventTarget(), { readyState: 'loading' });
+  const styles = [];
+  const document = Object.assign(new EventTarget(), { readyState: 'loading',
+    createElement: tag => ({ tag }), head: { append: element => styles.push(element) } });
   const context = vm.createContext({ window, document });
   vm.runInContext(await readFile(new URL('vnc-bridge.js', client), 'utf8'), context);
   vm.runInContext(wrapVncPreload(`
-    const { ipcRenderer } = require('electron');
+    const { ipcRenderer, webFrame } = require('electron');
+    webFrame.insertCSS('#noVNC_control_bar { display: none }');
     ipcRenderer.once('fixture:measure', (_event, width) => ipcRenderer.sendToHost('fixture:size', width, process.type));`), context);
+  assert.deepEqual(styles, [{ tag: 'style', textContent: '#noVNC_control_bar { display: none }' }]);
   assert.deepEqual(messages, []);
   document.dispatchEvent(new Event('DOMContentLoaded'));
   const send = (source, origin) => receive({ source, origin,

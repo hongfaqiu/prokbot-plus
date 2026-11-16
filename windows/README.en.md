@@ -8,7 +8,7 @@ The complete deployment steps are in the [AI deployment guide](../docs/AI-INSTAL
 
 ## Use
 
-The patcher accepts only the unmodified [Windows x64 **1.1.0** input](patchers/desktop/supported.json), the release the official stable channel reported on November 14, 2026. The older 0.71.2 installer is rejected during input verification, before pairing. The Android client is still built from the 0.71.2 installer; see the [Android notes](../android/README.en.md). ProkBot Plus release numbers are unrelated to Grok Bot versions. The original installer is only an input: you don't run it, and your installed official app is not affected.
+The recommended input is the unmodified [Windows x64 **1.1.0** installer](patchers/desktop/supported.json), the release the official stable channel reported on November 14, 2026. If 1.1.0 does not work for you, [fall back to 0.71.2](#falling-back-to-0712). Other versions and modified installers are rejected during input verification, before pairing. ProkBot Plus release numbers are unrelated to Grok Bot versions. The original installer is only an input: you don't run it, and your installed official app is not affected.
 
 From the repository root:
 
@@ -24,7 +24,17 @@ The tool downloads and verifies the official `Grok_Bot_1.1.0_Setup.exe` and writ
 | `GrokBotLocal-1.1.0-x64-portable.zip` | Portable archive; extract and run |
 | `GrokBotLocal-1.1.0-x64-Setup.exe` | Per-user installer into `%LOCALAPPDATA%\Programs\Grok Bot Local`, no administrator rights |
 
-Open the client and enter your Host address and six-character pairing code. To use an existing original installer, `app-64.7z` or installed original folder, pass `--source`; `--no-installer` builds the portable outputs only.
+Open the client and enter your Host address and six-character pairing code. To use an existing original installer, `app-64.7z` or installed original folder, pass `--source`; the tool recognizes the version by its digest. `--no-installer` builds the portable outputs only.
+
+### Falling back to 0.71.2
+
+If the 1.1.0 build does not work for you, quit it and build [0.71.2](patchers/desktop/0.71.2/supported.json):
+
+```powershell
+node windows/patchers/desktop/patch.mjs --version 0.71.2 --output windows/output/0.71.2
+```
+
+The tool then downloads and verifies `Grok_Bot_0.71.2_Setup.exe`, and the output filenames carry 0.71.2. A downloaded 0.71.2 installer also works with `--source`. Both versions share pairing and settings; do not run them at the same time. The 0.71.2 build has the older official interface.
 
 The installer accepts `/S` (silent) and `/D=folder` (last). For a regular install, uninstall from Settings → Apps or run `Uninstall Grok Bot Local.exe` in its folder. The new uninstaller keeps pairing, settings and personal files.
 
@@ -55,7 +65,7 @@ The new files go to a sibling named `<old folder> (side-by-side)`. The setup doe
 
 - `patchers/desktop/original.mjs`: carves `app-64.7z` out of the official installer and extracts it; the Android patcher uses it too.
 - `tools/desktop-recipes/`: `build.mjs` regenerates `patchers/desktop/recipes/` from the official 1.1.0 installer and the anchored edits in `spec.mjs`. Each anchor must be unique in its original file. `extensions/` holds the project code appended to original modules. With `--check` it only verifies that the committed recipes are reproduced byte for byte.
-- `patchers/desktop/0.71.2/`: the pinned 0.71.2 inputs and recipes the Android client still uses. `tools/port-desktop-recipes.mjs` derives these recipes from the Mac recipes of the same version and both originals, checking that every copied range keeps its structure.
+- `patchers/desktop/0.71.2/`: the pinned inputs and recipes of the 0.71.2 fallback, shared by the Windows fallback and the Android 0.71.2 interface. The patcher recognizes a `--source` by the size and SHA-256 in `supported.json`; a further fallback release goes into a directory named after its version in the same way. `tools/port-desktop-recipes.mjs` derives these recipes from the Mac recipes of the same version and both originals, checking that every copied range keeps its structure.
 - `installer/`: installer source (Go standard library only), `go build -trimpath -ldflags="-H=windowsgui -s -w" -o ../dist/installer/grokbot-setup-stub.exe .`
 - `dist/network/grokbot-tailcat.exe`: `python host/network/build-tailcat.py --target windows-amd64 --output windows/dist/network`
 - Tests: `node --test "windows/tests/*.test.mjs"`

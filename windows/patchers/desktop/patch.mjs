@@ -2,7 +2,9 @@
 // Build the Windows x64 client from the official Grok Bot installer: verify the
 // pinned original, replace the main process with the local client, apply the
 // Windows recipes, repack, record the new ASAR integrity in the executable and
-// produce a portable folder, a portable zip and a per-user installer.
+// produce a portable folder, a portable zip and a per-user installer. The
+// recommended release is built by default; an older pinned release (see
+// inputs.mjs) is chosen by --version or recognised from --source.
 import { readFile, writeFile, mkdir, mkdtemp, rm, stat, lstat, cp, rmdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -17,6 +19,7 @@ import { patchDesktopUpdateSettingsUi, resolveDesktopUpdateConfig } from '../../
 import { applicationIcon, replaceAsarIntegrity, stripAuthenticode } from './pe.mjs';
 import { unpackOriginal } from './original.mjs';
 import { withInstallerDiagnostic } from './input-diagnostic.mjs';
+import { selectWindowsRelease, windowsReleases } from './inputs.mjs';
 export { carveSevenZip } from './original.mjs';
 import { writeZip } from './zip.mjs';
 import { checkOutputLocation, publishBuild, writeSetup } from './output.mjs';
@@ -24,13 +27,16 @@ import { checkOutputLocation, publishBuild, writeSetup } from './output.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const windowsRoot = path.resolve(here, '../..');
 const repo = path.resolve(windowsRoot, '..');
-const supported = JSON.parse(await readFile(path.join(here, 'supported.json'), 'utf8'));
+const releases = (await windowsReleases()).map(({ supported }) => supported.version);
 const APP = 'Grok Bot Local', EXE = 'Grok Bot.exe';
 const args = process.argv.slice(2);
 const arg = name => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : null; };
 if (args.includes('--help')) {
-  console.log(`node windows/patchers/desktop/patch.mjs [--source <Grok_Bot_${supported.version}_Setup.exe | app-64.7z | 安装目录>] [--output <目录>] [--update-url <URL> (--update-public-key <SPKI Base64|PEM> | --update-public-key-file <文件>)] [--no-installer] [--verify-only] [--allow-cross-platform]
-省略 --source 时自动下载并校验 ${supported.version} Windows x64 原版。默认输出到 windows/output/。
+  const [recommended, ...older] = releases;
+  console.log(`node windows/patchers/desktop/patch.mjs [--source <Grok_Bot_${recommended}_Setup.exe | app-64.7z | 安装目录>] [--version <${releases.join('|')}>]
+    [--output <目录>] [--update-url <URL> (--update-public-key <SPKI Base64|PEM> | --update-public-key-file <文件>)] [--no-installer] [--verify-only] [--allow-cross-platform]
+推荐官方 ${recommended}；${older.length ? `${older.join('、')} 是回退版本，${recommended} 用不了时再用。` : ''}--source 指定的官方原版按摘要自动识别版本。
+省略 --source 时自动下载并校验 ${recommended}（或 --version 指定的版本）Windows x64 原版。默认输出到 windows/output/。
 --update-url / --update-public-key / --update-public-key-file 为客户端启用签名验证的自动更新。`);
   process.exit(0);
 }
@@ -39,9 +45,6 @@ if (!args.includes('--verify-only') && !args.includes('--allow-cross-platform') 
 const startedAt = performance.now();
 const outputRoot = path.resolve(arg('--output') ?? path.join(windowsRoot, 'output'));
 const appOutput = path.join(outputRoot, APP);
-const portableZip = path.join(outputRoot, `GrokBotLocal-${supported.version}-x64-portable.zip`);
-const setupExe = path.join(outputRoot, `GrokBotLocal-${supported.version}-x64-Setup.exe`);
-const manifestPath = path.join(outputRoot, `GrokBotLocal-${supported.version}-x64.patch.json`);
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 async function hashFile(filename) {
   const hash = createHash('sha256');
@@ -63,9 +66,13 @@ const temporary = await mkdtemp(path.join(os.tmpdir(), 'grokbot-windows-patch-')
 let stage, createdRoot;
 async function build() {
   const explicitSource = arg('--source');
+  const { directory, supported } = await selectWindowsRelease({ source: explicitSource, version: arg('--version') });
+  const portableZip = path.join(outputRoot, `GrokBotLocal-${supported.version}-x64-portable.zip`);
+  const setupExe = path.join(outputRoot, `GrokBotLocal-${supported.version}-x64-Setup.exe`);
+  const manifestPath = path.join(outputRoot, `GrokBotLocal-${supported.version}-x64.patch.json`);
   const source = await acquireDesktopSource({ source: explicitSource, cacheDirectory: path.join(windowsRoot, '.cache'), supported,
     onDownload: ({ version }) => console.error(`正在下载 Grok Bot ${version} Windows x64…`) });
-  const app = await withInstallerDiagnostic(unpackOriginal(source, temporary, supported), explicitSource && source, supported);
+  const app = await withInstallerDiagnostic(unpackOriginal(source, temporary, supported), explicitSource && source, supported, releases);
   const originalExe = path.join(app, EXE), originalAsar = path.join(app, 'resources/app.asar');
   const [exeSha256, asarSha256] = await Promise.all([hashFile(originalExe), hashFile(originalAsar)]);
   if (exeSha256 !== supported.exeSha256 || asarSha256 !== supported.asarSha256)
@@ -78,16 +85,17 @@ async function build() {
   const unpacked = path.join(temporary, 'app');
   asar.extractAll(originalAsar, unpacked);
   const originalUnpacked = new Set(unpackedFiles(asar.getRawHeader(originalAsar).header));
-  const notificationPolicy = await extractNotificationPolicy(unpacked, here);
+  const notificationPolicy = await extractNotificationPolicy(unpacked, directory);
   const pkgPath = path.join(unpacked, 'package.json');
   const pkg = JSON.parse(await readFile(pkgPath, 'utf8'));
   if (pkg.version !== supported.version) throw new Error('ASAR 包版本不一致。');
   if (sha(asar.getRawHeader(originalAsar).headerString) !== supported.asarHeaderSha256) throw new Error('ASAR header fingerprint mismatch');
   const patchStarted = performance.now();
-  await applyReleaseRecipes(unpacked, path.join(here, 'recipes'));
+  await applyReleaseRecipes(unpacked, path.join(directory, 'recipes'));
   await patchDesktopUpdateSettingsUi(unpacked);
   const patchSeconds = Number(((performance.now() - patchStarted) / 1000).toFixed(3));
-  console.log(JSON.stringify({ verified: true, recipesVerified: true, version: supported.version, architecture: supported.architecture, asarSha256 }));
+  console.log(JSON.stringify({ verified: true, recipesVerified: true, version: supported.version, recommended: supported.version === releases[0],
+    architecture: supported.architecture, asarSha256 }));
   if (args.includes('--verify-only')) return;
   await checkOutputLocation(source, outputRoot, targets);
   createdRoot = await mkdir(outputRoot, { recursive: true });

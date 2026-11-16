@@ -2,145 +2,139 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import nativeFs, { appendFileSync } from 'node:fs';
+import nativeFs from 'node:fs';
 import fs from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { withInstallerDiagnostic } from '../patchers/desktop/input-diagnostic.mjs';
-import { snapshotPayload } from '../patchers/desktop/snapshot-payload.mjs';
+import { selectWindowsRelease, windowsInputs, windowsReleaseFor, windowsReleases } from '../patchers/desktop/inputs.mjs';
 
 const repo = new URL('../../', import.meta.url);
-const readJson = async url => JSON.parse(await fs.readFile(url, 'utf8'));
-const known = await readJson(new URL('windows/patchers/desktop/known-unsupported.json', repo));
-const supported = await readJson(new URL('windows/patchers/desktop/supported.json', repo));
-const sample = Buffer.alloc(2 * 65536 + 17, 'x'); // Non-executable; spans multiple stream reads.
 const pin = data => ({ bytes: data.length, sha256: createHash('sha256').update(data).digest('hex') });
+const MISMATCH = '官方安装包摘要不匹配。';
 
 async function disposable(t) {
   const base = await fs.realpath(tmpdir());
   const root = await fs.mkdtemp(path.join(base, 'grokbot-input-diagnostic-'));
-  assert.equal(path.dirname(await fs.realpath(root)), base);
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return root;
 }
 
-// Exercise the shipping CLI with a tiny diagnostic fingerprint, without packaging vendor bytes or CI.
-async function fixtureRelease(root) {
-  for (const relative of ['windows/patchers/desktop/', 'mac/patchers/desktop/']) {
-    const from = new URL(relative, repo), to = path.join(root, relative);
-    await fs.mkdir(to, { recursive: true });
-    for (const entry of await fs.readdir(from, { withFileTypes: true })) {
-      if (entry.isFile() && /\.(mjs|json)$/.test(entry.name)) await fs.copyFile(new URL(entry.name, from), path.join(to, entry.name));
-    }
+// Fixture pins: 2.0.0 is recommended (beside the patcher), 1.0.0 and 1.5.0 are older releases
+// in directories named after their versions.
+async function fixtureReleases(root) {
+  const bytes = { '2.0.0': Buffer.from('recommended installer'), '1.5.0': Buffer.from('middle installer!!'), '1.0.0': Buffer.from('older installer') };
+  const asar = { '2.0.0': Buffer.from('asar 2'), '1.5.0': Buffer.from('asar 15'), '1.0.0': Buffer.from('asar 1') };
+  const release = version => ({ version, architecture: 'x64', archive: pin(bytes[version]),
+    payload: pin(Buffer.from(`payload ${version}`)), asarSha256: pin(asar[version]).sha256 });
+  await fs.writeFile(path.join(root, 'supported.json'), JSON.stringify(release('2.0.0')));
+  for (const version of ['1.0.0', '1.5.0']) {
+    await fs.mkdir(path.join(root, version));
+    await fs.writeFile(path.join(root, version, 'supported.json'), JSON.stringify(release(version)));
   }
-  const desktop = path.join(root, 'windows/patchers/desktop');
-  await fs.writeFile(path.join(desktop, 'known-unsupported.json'), JSON.stringify({ ...known,
-    archiveBytes: sample.length, observedArchiveSha256: pin(sample).sha256 }));
-  return desktop;
+  await fs.mkdir(path.join(root, 'recipes')); // Not a release.
+  return { bytes, asar };
 }
 
-function observeIO(t, beforeStream = () => {}) {
-  const streams = [], realOpen = fs.open;
-  const open = t.mock.method(fs, 'open', async (source, flags) => {
-    const file = await realOpen(source, flags), createStream = file.createReadStream.bind(file);
-    t.mock.method(file, 'createReadStream', options => {
-      beforeStream(source);
-      const stream = createStream(options);
-      streams.push({ source, flags, options, stream });
-      return stream;
-    });
-    return file;
-  });
-  const pathStreams = t.mock.method(nativeFs, 'createReadStream');
-  const reads = [open, t.mock.method(fs, 'stat'), t.mock.method(fs, 'readFile'), pathStreams];
+test('the recommended release comes first, then older releases newest first', async t => {
+  const root = await disposable(t);
+  await fixtureReleases(root);
+  const releases = await windowsReleases(root);
+  assert.deepEqual(releases.map(({ supported }) => supported.version), ['2.0.0', '1.5.0', '1.0.0']);
+  assert.deepEqual(releases.map(({ directory }) => path.relative(root, directory)), ['', '1.5.0', '1.0.0']);
+  await assert.rejects(windowsInputs('9.9.9', root), /No Windows 9\.9\.9 inputs/);
+  await assert.rejects(windowsInputs('../2.0.0', root), /Invalid Windows version/);
+  await fs.writeFile(path.join(root, '1.0.0', 'supported.json'), JSON.stringify({ version: '1.5.0' }));
+  await assert.rejects(windowsReleases(root), /are for 1\.5\.0, not 1\.0\.0/);
+});
+
+test('an explicit installer, payload or install directory selects its release only by size and SHA-256', async t => {
+  const root = await disposable(t), { bytes, asar } = await fixtureReleases(root);
+  const releases = await windowsReleases(root);
+  const versionOf = async source => (await windowsReleaseFor(source, releases)).supported.version;
+  const file = async (name, data) => { const filename = path.join(root, name); await fs.writeFile(filename, data); return filename; };
+
+  assert.equal(await versionOf(undefined), '2.0.0');
+  assert.equal(await versionOf(await file('older.exe', bytes['1.0.0'])), '1.0.0');
+  assert.equal(await versionOf(await file('renamed-setup.bin', bytes['1.5.0'])), '1.5.0');
+  assert.equal(await versionOf(await file('app-64.7z', Buffer.from('payload 1.0.0'))), '1.0.0');
+  // Same size as the 1.0.0 installer but other bytes: the recommended release's verification rejects it.
+  const altered = Buffer.from(bytes['1.0.0']); altered[0] ^= 1;
+  assert.equal(await versionOf(await file('altered.exe', altered)), '2.0.0');
+  assert.equal(await versionOf(await file('unknown.exe', Buffer.from('x'))), '2.0.0');
+
+  const install = path.join(root, 'installed');
+  await fs.mkdir(path.join(install, 'resources'), { recursive: true });
+  assert.equal(await versionOf(install), '2.0.0'); // No app.asar.
+  await fs.writeFile(path.join(install, 'resources/app.asar'), asar['1.5.0']);
+  assert.equal(await versionOf(install), '1.5.0');
+  await assert.rejects(windowsReleaseFor(undefined, []), /No Windows releases/);
+});
+
+test('this repository builds Windows 1.1.0 (recommended) and 0.71.2 (fallback) with distinct pins', async () => {
+  const releases = await windowsReleases();
+  assert.deepEqual(releases.map(({ supported }) => supported.version), ['1.1.0', '0.71.2']);
+  const digests = releases.flatMap(({ supported }) => [supported.archive.sha256, supported.payload.sha256, supported.asarSha256]);
+  assert.equal(new Set(digests).size, digests.length);
+  for (const { directory, supported } of releases) {
+    assert.equal(supported.architecture, 'x64');
+    assert.ok(supported.archive.url.endsWith(`/win32-x64/${supported.version}/Grok_Bot_${supported.version}_Setup.exe`), supported.version);
+    for (const name of ['recipes/manifest.json', 'notification-policy.json']) await fs.access(path.join(directory, name));
+  }
+  assert.equal((await selectWindowsRelease({ version: '0.71.2' })).supported.version, '0.71.2');
+  assert.equal((await selectWindowsRelease({})).supported.version, '1.1.0');
+  await assert.rejects(selectWindowsRelease({ version: '0.70.0' }), /不支持 Grok Bot 0\.70\.0。可用版本：1\.1\.0、0\.71\.2。/);
+  await assert.rejects(selectWindowsRelease({ version: '1.1.0', accepted: ['0.71.2'] }), /可用版本：0\.71\.2。/);
+  await assert.rejects(fs.access(new URL('windows/patchers/desktop/known-unsupported.json', repo)), { code: 'ENOENT' });
+});
+
+test('an unknown explicit installer is explained in both languages without any file access', async t => {
+  const supported = (await windowsReleases())[0].supported;
+  const reads = [t.mock.method(fs, 'open'), t.mock.method(fs, 'stat'), t.mock.method(fs, 'readFile'), t.mock.method(nativeFs, 'createReadStream')];
   syncBuiltinESMExports();
   t.after(() => { for (const read of reads) read.mock.restore(); syncBuiltinESMExports(); });
-  return { streams, open, pathStreams, reads };
-}
 
-test('the packaged diagnostic names only the recorded whole Windows 0.71.2 installer', () => {
-  assert.equal(known.version, '0.71.2'); assert.equal(known.archiveBytes, 118384600);
-  assert.equal(known.observedArchiveSha256, 'be14f2f2067d86334360f5d4f7c94515886ef795df25645aa883d3983c4ab4aa');
-  assert.deepEqual(known.testedAgainst, { version: supported.version, sha256: supported.archive.sha256 });
-  assert.notEqual(supported.archive.sha256, known.observedArchiveSha256);
-});
-
-test('only a rejected installer of the known size gets one read-only bounded stream', async t => {
-  const root = await disposable(t), desktop = await fixtureRelease(root), source = path.join(root, 'renamed.EXE');
-  const { withInstallerDiagnostic: diagnose } = await import(pathToFileURL(path.join(desktop, 'input-diagnostic.mjs')));
-  const verify = () => diagnose(snapshotPayload(source, root, supported), source, supported);
-  let append = false;
-  const { open, pathStreams, streams } = observeIO(t, name => { if (append) appendFileSync(name, '!'); });
-  await fs.writeFile(source, sample.subarray(1));
-  await assert.rejects(verify(), /origin of this file are unverified/);
-  assert.equal(open.mock.callCount(), 0);
-  assert.equal(pathStreams.mock.callCount(), 0);
-
-  await fs.writeFile(source, sample);
-  await assert.rejects(verify(), /official Grok Bot 0\.71\.2 installer is incompatible/);
-  append = true; // The prefix is still a match, but it is no longer the whole file.
-  await assert.rejects(verify(), /origin of this file are unverified/);
-  assert.equal(open.mock.callCount(), 2);
-  assert.equal(pathStreams.mock.callCount(), 0);
-  assert.equal(streams.length, 2);
-  for (const read of streams) {
-    assert.equal(read.source, source);
-    assert.equal(read.flags, 'r');
-    assert.deepEqual([read.options.start, read.options.end, read.stream.bytesRead], [0, sample.length - 1, sample.length]);
-  }
-});
-
-test('a supported archive and errors outside explicit EXE pin verification perform no diagnostic I/O', async t => {
-  const root = await disposable(t), source = path.join(root, 'supported.exe');
-  const payload = Buffer.alloc(32);
-  Buffer.from('377abcaf271c', 'hex').copy(payload);
-  const wrapper = Buffer.concat([Buffer.from('fixture'), payload]);
-  const pins = { ...supported, archive: pin(wrapper), payload: pin(payload) };
-  await fs.writeFile(source, wrapper);
-  const verified = snapshotPayload(source, root, pins);
-  const result = await verified; // Count only additional I/O after the usual positive checks.
-  assert.deepEqual(await fs.readFile(result), payload);
-  const { reads } = observeIO(t);
-  assert.equal(await withInstallerDiagnostic(verified, source, pins), result);
-  assert.equal(await withInstallerDiagnostic(Promise.resolve(root), root, pins), root);
-  const mismatch = new Error('官方安装包摘要不匹配。');
-  for (const [input, cause] of [[null, mismatch], [path.join(root, 'app-64.7z'), mismatch], [root, mismatch],
-    [source, new Error('安装包中没有找到受支持的程序包。')], [source, new Error('EACCES')]]) {
-    await assert.rejects(withInstallerDiagnostic(Promise.reject(cause), input, pins), error => error === cause);
+  const cause = new Error(MISMATCH);
+  await assert.rejects(withInstallerDiagnostic(Promise.reject(cause), 'C:\\Downloads\\Setup.EXE', supported, ['1.1.0', '0.71.2']), error => {
+    assert.equal(error.cause, cause);
+    assert.match(error.message, /未进入配对/);
+    assert.ok(error.message.includes('官方 Grok Bot 1.1.0（推荐）或 0.71.2 Windows x64 安装包'));
+    assert.match(error.message, /The version and origin of this file are unverified\. Pairing did not run\./);
+    assert.ok(error.message.includes('Grok Bot 1.1.0 (recommended) or 0.71.2 Windows x64 installer'));
+    assert.ok(error.message.includes('Omit --source to fetch the exact supported Grok Bot 1.1.0 Windows x64 installer'));
+    assert.match(error.message, /No need to uninstall your existing app/);
+    return true;
+  });
+  await assert.rejects(withInstallerDiagnostic(Promise.reject(cause), 'Setup.exe', supported), error =>
+    error.message.includes('1.1.0 (recommended) Windows x64') && !error.message.includes('0.71.2'));
+  // Success, other errors, and sources that are not an installer pass through unchanged.
+  assert.equal(await withInstallerDiagnostic(Promise.resolve('payload'), 'Setup.exe', supported), 'payload');
+  for (const [source, error] of [[null, cause], ['app-64.7z', cause], ['C:\\install', cause], ['Setup.exe', new Error('EACCES')],
+    ['Setup.exe', new Error('安装包中没有找到受支持的程序包。')]]) {
+    await assert.rejects(withInstallerDiagnostic(Promise.reject(error), source, supported), thrown => thrown === error);
   }
   for (const read of reads) assert.equal(read.mock.callCount(), 0);
 });
 
-test('standalone Windows CLI rejects a renamed exact installer and an altered namesake without touching output',
+test('the Windows CLI explains an unknown installer and leaves the output untouched',
   { skip: process.platform !== 'win32' }, async t => {
-    const root = await disposable(t), desktop = await fixtureRelease(root), output = path.join(root, 'output');
-    const keep = `GrokBotLocal-${supported.version}-x64.patch.json`;
+    const root = await disposable(t), output = path.join(root, 'output'), source = path.join(root, 'Grok_Bot_1.1.0_Setup.exe');
+    const keep = 'GrokBotLocal-1.1.0-x64.patch.json';
     await fs.mkdir(output);
     await fs.writeFile(path.join(output, keep), 'previous build');
-    const corrupt = Buffer.from(sample);
-    corrupt[corrupt.length - 1] ^= 1;
-    for (const [name, bytes, exact] of [['renamed.EXE', sample, true], ['Grok_Bot_0.71.2_Setup.exe', corrupt, false]]) {
-      const source = path.join(root, name);
-      await fs.writeFile(source, bytes);
-      await assert.rejects(promisify(execFile)(process.execPath, [path.join(desktop, 'patch.mjs'), '--source', name, '--output', output],
-        { cwd: root, windowsHide: true, timeout: 10000 }), error => {
-        assert.equal(error.code, 1);
-        assert.equal(error.stdout, '');
-        if (exact) assert.match(error.stderr, /official Grok Bot 0\.71\.2 installer is incompatible with this ProkBot Plus patch/);
-        else {
-          assert.match(error.stderr, /origin of this file are unverified/);
-          assert.doesNotMatch(error.stderr, /official|官方|0\.71\.2/i);
-        }
-        assert.match(error.stderr, /Pairing did not run/);
-        assert.ok(error.stderr.includes(`Omit --source to fetch the exact supported Grok Bot ${supported.version} Windows ${supported.architecture}`));
-        assert.match(error.stderr, /No need to uninstall your existing app/);
-        return true;
-      });
-      assert.deepEqual(await fs.readFile(source), bytes);
-      assert.deepEqual(await fs.readdir(output), [keep]);
-      assert.equal(await fs.readFile(path.join(output, keep), 'utf8'), 'previous build');
-    }
+    await fs.writeFile(source, Buffer.alloc(4096, 'x'));
+    const patcher = fileURLToPath(new URL('windows/patchers/desktop/patch.mjs', repo));
+    await assert.rejects(promisify(execFile)(process.execPath, [patcher, '--source', source, '--output', output],
+      { cwd: root, windowsHide: true, timeout: 30000 }), error => {
+      assert.equal(error.code, 1);
+      assert.equal(error.stdout, '');
+      assert.match(error.stderr, /origin of this file are unverified\. Pairing did not run\./);
+      assert.ok(error.stderr.includes('1.1.0 (recommended) or 0.71.2'));
+      return true;
+    });
+    assert.deepEqual(await fs.readdir(output), [keep]);
+    assert.equal(await fs.readFile(path.join(output, keep), 'utf8'), 'previous build');
   });

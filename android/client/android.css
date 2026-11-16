@@ -516,7 +516,7 @@ html.grokbot-phone .sand-info-pane__top:not(:has(.sand-info-pane__back)) .sand-i
 }
 html.grokbot-phone .sand-info-pane__top:not(:has(.sand-info-pane__back)) .sand-info-pane__actions > .sand-kit-icon-button:last-child,
 html.grokbot-phone .sand-info-pane__back .sand-kit-icon-button,
-html.grokbot-phone .sand-settings-panel__close {
+html.grokbot-phone :is(.sand-settings-panel__close, .sand-settings-panel > .sand-kit-icon-button:first-child) {
   border-radius: 22px !important;
   background: var(--grokbot-glass) !important;
   box-shadow: var(--grokbot-glass-shadow) !important;
@@ -540,7 +540,7 @@ html.grokbot-phone .sand-info-pane__back .sand-kit-icon-button::after {
 }
 
 /* Settings, connected apps and search fill the screen. */
-html.grokbot-phone .ui-dialog:is(.sand-command-palette, :has(.sand-settings-layout), :has(.sand-plugins-layout)) {
+html.grokbot-phone :is(.ui-dialog, [data-component="base-dialog-popup"]):is(.sand-command-palette, :has(.sand-settings-layout), :has(.sand-plugins-layout)) {
   top: 0 !important;
   left: 0 !important;
   right: 0 !important;
@@ -555,7 +555,7 @@ html.grokbot-phone .ui-dialog:is(.sand-command-palette, :has(.sand-settings-layo
   border-radius: 0 !important;
   background: var(--grokbot-paper) !important;
 }
-html.grokbot-phone .ui-dialog:is(:has(.sand-settings-layout), :has(.sand-plugins-layout)) > *,
+html.grokbot-phone :is(.ui-dialog, [data-component="base-dialog-popup"]):is(:has(.sand-settings-layout), :has(.sand-plugins-layout)) > *,
 html.grokbot-phone .ui-dialog.sand-command-palette > .ui-scroll-area {
   flex: 1 1 auto;
   min-height: 0;
@@ -579,6 +579,23 @@ html.grokbot-phone .ui-dialog.sand-command-palette > :first-child {
 html.grokbot-phone .ui-dialog.sand-command-palette > :first-child input {
   font-size: 17px !important;
 }
+/* 1.1.0 nests the field row two levels inside the popup. */
+html.grokbot-phone [data-component="base-dialog-popup"].sand-command-palette > div > div > div:first-child:has(> input) {
+  box-sizing: border-box;
+  width: auto !important;
+  height: 44px;
+  margin: 6px 16px 8px !important;
+  padding: 0 16px !important;
+  gap: 4px;
+  align-items: center !important;
+  border: 0 !important;
+  border-radius: 22px;
+  background: var(--grokbot-glass);
+  box-shadow: var(--grokbot-glass-shadow);
+}
+html.grokbot-phone [data-component="base-dialog-popup"].sand-command-palette > div > div > div:first-child > input {
+  font-size: 17px !important;
+}
 html.grokbot-phone .sand-settings-layout {
   width: 100% !important;
   height: 100% !important;
@@ -595,11 +612,13 @@ html.grokbot-phone .sand-settings-nav__item {
   padding: 0 14px !important;
   font-size: 15px !important;
 }
-/* The selected tab already names the section. */
-html.grokbot-phone .sand-settings-pane-header > h2 {
+/* The selected tab already names the section. 1.1.0 wraps the title in a div. */
+html.grokbot-phone .sand-settings-pane-header > h2,
+html.grokbot-phone .sand-settings-pane-header > div > h2 {
   display: none !important;
 }
-html.grokbot-phone .sand-settings-pane-header:not(:has(> :not(h2) > *)) {
+html.grokbot-phone .sand-settings-pane-header:not(:has(> :not(h2) > *)),
+html.grokbot-phone .sand-settings-pane-header:has(> div > h2):not(:has(button, input, select, a)) {
   display: none !important;
 }
 html.grokbot-phone .sand-settings-pane-header {
@@ -610,7 +629,7 @@ html.grokbot-phone .sand-settings-pane-header {
 html.grokbot-phone .sand-settings-panel {
   position: static !important;
 }
-html.grokbot-phone .sand-settings-panel__close {
+html.grokbot-phone :is(.sand-settings-panel__close, .sand-settings-panel > .sand-kit-icon-button:first-child) {
   position: absolute !important;
   top: 6px !important;
   left: 16px !important;
@@ -618,10 +637,10 @@ html.grokbot-phone .sand-settings-panel__close {
   width: 44px !important;
   height: 44px !important;
 }
-html.grokbot-phone .sand-settings-panel__close > * {
+html.grokbot-phone :is(.sand-settings-panel__close, .sand-settings-panel > .sand-kit-icon-button:first-child) > * {
   display: none !important;
 }
-html.grokbot-phone .sand-settings-panel__close::after {
+html.grokbot-phone :is(.sand-settings-panel__close, .sand-settings-panel > .sand-kit-icon-button:first-child)::after {
   content: "";
   width: 24px;
   height: 24px;
@@ -758,8 +777,9 @@ html.grokbot-phone .sand-media-viewer__top-bar > .sand-kit-icon-button:last-chil
 }
 
 /* Other dialogs are sheets from the bottom, as in the official app: a round close button on the
-   left with the title next to it, and wide round buttons at the bottom. */
-html.grokbot-phone .ui-dialog:not(.sand-command-palette, :has(.sand-settings-layout), :has(.sand-plugins-layout)) {
+   left with the title next to it, and wide round buttons at the bottom. 0.71.2 marks dialogs with
+   .ui-dialog, 1.1.0 with data-component="base-dialog-popup". */
+html.grokbot-phone :is(.ui-dialog, [data-component="base-dialog-popup"]):not(.sand-command-palette, :has(.sand-settings-layout), :has(.sand-plugins-layout)) {
   top: auto !important;
   bottom: 0 !important;
   left: 0 !important;
@@ -773,7 +793,7 @@ html.grokbot-phone .ui-dialog:not(.sand-command-palette, :has(.sand-settings-lay
   background: var(--grokbot-chrome) !important;
   animation: grokbot-sheet-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-html.grokbot-phone .ui-dialog:not(.sand-command-palette, :has(.sand-settings-layout), :has(.sand-plugins-layout)) > .ui-dialog-close {
+html.grokbot-phone :is(.ui-dialog, [data-component="base-dialog-popup"]):not(.sand-command-palette, :has(.sand-settings-layout), :has(.sand-plugins-layout)) > :is(.ui-dialog-close, [data-component="base-dialog-close"], .sand-kit-icon-button:first-child) {
   top: 14px !important;
   left: 16px !important;
   right: auto !important;
@@ -783,10 +803,10 @@ html.grokbot-phone .ui-dialog:not(.sand-command-palette, :has(.sand-settings-lay
   background: var(--grokbot-fill-3) !important;
   color: var(--grokbot-label) !important;
 }
-html.grokbot-phone .ui-dialog:not(.sand-command-palette, :has(.sand-settings-layout), :has(.sand-plugins-layout)) > .ui-dialog-close .ui-icon {
+html.grokbot-phone :is(.ui-dialog, [data-component="base-dialog-popup"]):not(.sand-command-palette, :has(.sand-settings-layout), :has(.sand-plugins-layout)) > :is(.ui-dialog-close, [data-component="base-dialog-close"], .sand-kit-icon-button:first-child) .ui-icon {
   transform: scale(1.3);
 }
-html.grokbot-phone .ui-dialog:not(.sand-command-palette, :has(.sand-settings-layout), :has(.sand-plugins-layout)):has(> .ui-dialog-close) > div:has(> h2) {
+html.grokbot-phone :is(.ui-dialog, [data-component="base-dialog-popup"]):not(.sand-command-palette, :has(.sand-settings-layout), :has(.sand-plugins-layout)):has(> :is(.ui-dialog-close, [data-component="base-dialog-close"], .sand-kit-icon-button:first-child)) > div:has(> h2) {
   height: auto !important;
   min-height: 72px !important;
   display: flex !important;
@@ -796,28 +816,28 @@ html.grokbot-phone .ui-dialog:not(.sand-command-palette, :has(.sand-settings-lay
   padding: 0 16px 0 72px !important;
   border: 0 !important;
 }
-html.grokbot-phone .ui-dialog:not(.sand-command-palette, :has(.sand-settings-layout), :has(.sand-plugins-layout)) > div:has(> h2) > h2 {
+html.grokbot-phone :is(.ui-dialog, [data-component="base-dialog-popup"]):not(.sand-command-palette, :has(.sand-settings-layout), :has(.sand-plugins-layout)) > div:has(> h2) > h2 {
   font-size: 17px !important;
   line-height: 22px !important;
   font-weight: 500 !important;
 }
-html.grokbot-phone .ui-dialog:not(.sand-command-palette, :has(.sand-settings-layout), :has(.sand-plugins-layout)) > div:last-child:has(> button) {
+html.grokbot-phone :is(.ui-dialog, [data-component="base-dialog-popup"]):not(.sand-command-palette, :has(.sand-settings-layout), :has(.sand-plugins-layout)) > div:last-child:has(> button) {
   gap: 8px !important;
   padding: 12px 16px 16px !important;
   border: 0 !important;
 }
-html.grokbot-phone .ui-dialog:not(.sand-command-palette, :has(.sand-settings-layout), :has(.sand-plugins-layout)) > div:last-child:has(> button) > button {
+html.grokbot-phone :is(.ui-dialog, [data-component="base-dialog-popup"]):not(.sand-command-palette, :has(.sand-settings-layout), :has(.sand-plugins-layout)) > div:last-child:has(> button) > button {
   flex: 1 1 0;
   min-height: 50px !important;
   border-radius: 25px !important;
   font-size: 17px !important;
 }
-html.grokbot-phone .ui-dialog > div:last-child:has(> button) > button[data-variant="primary"] {
+html.grokbot-phone :is(.ui-dialog, [data-component="base-dialog-popup"]) > div:last-child:has(> button) > button[data-variant="primary"] {
   border: 0 !important;
   background: var(--grokbot-label) !important;
   color: var(--grokbot-paper) !important;
 }
-html.grokbot-phone .ui-dialog > div:last-child:has(> button) > button[data-variant="primary"]:disabled {
+html.grokbot-phone :is(.ui-dialog, [data-component="base-dialog-popup"]) > div:last-child:has(> button) > button[data-variant="primary"]:disabled {
   opacity: 0.35;
 }
 /* Confirmations: the question on top, two wide round buttons below. */
@@ -850,7 +870,9 @@ html.grokbot-phone .sand-alert-dialog > div:last-child button {
 html.grokbot-phone .sand-create-bot-dialog > div:last-child > button[data-variant="secondary"] {
   display: none !important;
 }
-html.grokbot-phone .sand-create-bot-dialog .ui-dialog-content input {
+/* 1.1.0 dropped the content class; the name field sits two levels inside the popup. */
+html.grokbot-phone .sand-create-bot-dialog .ui-dialog-content input,
+html.grokbot-phone .sand-create-bot-dialog[data-component="base-dialog-popup"] > div > div > input {
   height: 56px !important;
   border: 0 !important;
   border-radius: 14px !important;

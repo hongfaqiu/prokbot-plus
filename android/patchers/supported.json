@@ -1,13 +1,21 @@
 {
   "schema": "grokbot-android-build/v1",
-  "desktopVersion": "0.71.2",
+  "desktopVersion": "1.1.0",
   "shell": {
     "versionName": "1.2.1",
     "versionCode": 10201,
     "path": "android/dist/grokbot-android-shell.apk",
     "sha256": "e45494ff9b7052c8fa286ec49edcd842ded09e2780b2b3bf5a9df0bbfe2d07ac"
   },
-  "rendererIndexSha256": "df9cfae598a2e155700557036ab4a3da636b043a0b947df1c1dcf33ec4c193d7",
-  "preloadSha256": "3126c352eb42ad28bf0892730bf765a1bca8b6ecda6b341f4d1305d7fc112db6",
-  "vncPreloadSha256": "776cabb84da5bc7a16713a0aae7d38cd45b3de1a7207bc9980965b4bad88c402"
+  "rendererIndexSha256": "666fe93a65730cbc3d36192de2bff5e5f3da4b36bd9ec4e11a6d51c4a6b166da",
+  "preloadSha256": "3204c8744260d6070dcffe2192b184bc6cdc9cb5d881d73e8b30c3517e91dac9",
+  "vncPreloadSha256": "095ee69ead11cae1a22fb593e72212f05c7412ddbb5b03ed1f739b36c497dbff",
+  "fallback": [
+    {
+      "desktopVersion": "0.71.2",
+      "rendererIndexSha256": "df9cfae598a2e155700557036ab4a3da636b043a0b947df1c1dcf33ec4c193d7",
+      "preloadSha256": "3126c352eb42ad28bf0892730bf765a1bca8b6ecda6b341f4d1305d7fc112db6",
+      "vncPreloadSha256": "776cabb84da5bc7a16713a0aae7d38cd45b3de1a7207bc9980965b4bad88c402"
+    }
+  ]
 }

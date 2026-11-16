@@ -70,10 +70,10 @@ python3 host/deploy.py status < /dev/null
 
 | 客户端 | 固定输入及对应包内手册 |
 | --- | --- |
-| Windows 10/11 x64 | Windows 包内 `windows/README.md`。用官方 1.1.0 x64 安装包生成便携版或安装器；保留同包的 `mac/` 共用代码。 |
-| Mac（Apple Silicon） | Mac 包内 `mac/README.md`。使用官方 0.71.2 Apple Silicon 原版；本机图形控制还需合适的签名和系统授权。 |
+| Windows 10/11 x64 | Windows 包内 `windows/README.md`。默认用官方 1.1.0 x64 安装包生成便携版或安装器；1.1.0 用不了时加 `--version 0.71.2` 改用 0.71.2。保留同包的 `mac/` 共用代码。 |
+| Mac（Apple Silicon） | Mac 包内 `mac/README.md`。使用官方 0.71.2 Apple Silicon 原版（Mac 尚未适配 1.1.0）；本机图形控制还需合适的签名和系统授权。 |
 | iPhone | iOS 包内 `ios/README.md` 的「签名」。自备 1.16.0 (23152) 的已解密 IPA；按 `extension-signing.json` 为主应用和三个扩展配置各自的签名。 |
-| Android 9+ | Android 包内 `android/README.md`。用官方 Windows 0.71.2 安装包（不是 Windows 客户端所用的 1.1.0）和项目外壳生成 APK，不使用官方 Android APK；单独备份自己的签名密钥，升级须使用同一密钥。 |
+| Android 9+ | Android 包内 `android/README.md`。默认用官方 Windows 1.1.0 安装包（和 Windows 客户端同一个文件）的界面和项目外壳生成 APK，1.1.0 界面用不了时加 `--version 0.71.2`；不使用官方 Android APK；单独备份自己的签名密钥，升级须使用同一密钥。 |
 
 准备原包前看首页的[客户端版本表](../README.md#client-versions)。官方商店和更新通道可能先行发布新版；工具只接受右栏固定输入。Android 外壳有自己的应用版本，和界面版本、最低 Android 系统版本不是一回事。
 

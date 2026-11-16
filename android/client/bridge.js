@@ -8,7 +8,7 @@
 // - answers the preload's IPC with the services of mac/clients/desktop, ported in
 //   services.js and gateway.js;
 // - adds window.localBot, the API that the ProkBot Plus renderer patches use.
-import officialPreload, { methods as preloadMethods } from './official-preload.js';
+import officialPreload, { methods as preloadMethods, edges as preloadEdges } from './official-preload.js';
 import { boot as androidBoot, native, log, timeout } from './native.js';
 import { createGateway } from './gateway.js';
 import { installWebviewFrames } from './webview.js';
@@ -164,6 +164,8 @@ const services = createServices({
 // ---- the Electron stand-in for the original preload ---------------------------------------
 
 const methodNames = new Set(preloadMethods);
+// The 1.1.0 desktop mount panels and Spotlight are official windows this client never opens.
+const otherEdges = new Set(Object.keys(preloadEdges ?? {}));
 const ports = new Set();
 async function invoke(channel, args) {
   if (channel === 'dune-rpc:main:probe') return { ok: true, value: methodNames.has(args) || services.has(args) };
@@ -172,6 +174,9 @@ async function invoke(channel, args) {
     try { return { ok: true, value: await services.call(method, args) }; }
     catch (error) { return { ok: false, failure: { code: 'edge/handler-failed', detail: error?.message ?? String(error) } }; }
   }
+  const edge = /^dune-rpc:([a-z][a-z-]*):(probe|m:)/.exec(channel);
+  if (edge && otherEdges.has(edge[1])) return edge[2] === 'probe' ? { ok: true, value: false }
+    : { ok: false, failure: { code: 'edge/unknown-method', detail: `The local client does not provide ${edge[1]}` } };
   if (channel === 'sand:coordinator-port-request') {
     const { port1, port2 } = new MessageChannel();
     const dispose = gateway.attach(port1);
@@ -236,7 +241,8 @@ window.localBot = Object.freeze({
     try {
       if (settings.realtimeVoice !== true) throw new Error(grokText('请启用实时语音。', 'Enable realtime voice.'));
       return { ok: true, credential: await mintVoiceCredential({ request: gateway.request }, agentId) };
-    } catch (error) { return { ok: false, fault: 'unavailable', detail: error.message }; }
+    // 1.1.0 reads a missing usage refusal as a usage limit; this failure is never one.
+    } catch (error) { return { ok: false, fault: { reason: 'unavailable' }, usageRefusal: null, detail: error.message }; }
   },
   getVoicePreference: () => services.call('getRealtimeVoiceEnabled'),
   setVoicePreference: enabled => services.call('setRealtimeVoiceEnabled', { enabled }),
@@ -272,7 +278,7 @@ officialPreload(name => {
   throw new Error(`Cannot find module '${name}'`);
 }, preloadProcess);
 
-installWebviewFrames({ hostOrigin: () => server, vncOrigin: androidBoot.vncOrigin, tailcat: () => connection.tailcat === true });
+installWebviewFrames({ hostOrigin: () => server, vncOrigin: androidBoot.vncOrigin, tailcat: () => connection.tailcat === true, desktopTicket: gateway.desktopTicket });
 installLayoutFixes();
 if (anchorFallback) log(`[webview] CSS anchor positioning fallback active (${navigator.userAgent.match(/Chrome\/[\d.]+/)?.[0] ?? 'unknown'})`);
 
@@ -344,8 +350,11 @@ window.__grokbotAndroid = Object.freeze({
       if (!focused) {
         blurredAt = blurredAt || Date.now();
         reportFocus();
+        // 1.1.0 tracks whether the workspace is on screen; 0.71.2 ignores these events.
+        emit('window-visibility', { visible: false });
         return;
       }
+      emit('window-visibility', { visible: true });
       const hostAwayMs = Number.isFinite(payload?.awayMs) && payload.awayMs >= 0 ? payload.awayMs : 0;
       const awayMs = Math.max(hostAwayMs, blurredAt ? Date.now() - blurredAt : 0);
       blurredAt = 0;

@@ -3,6 +3,7 @@
 // official Grok Bot Windows installer (verified against pinned hashes) with the
 // ProkBot Plus desktop recipes applied; the shell APK and the bridge in
 // android/client are ProkBot Plus code. The APK is signed with the user's own key.
+// supported.json names the recommended interface release and older fallbacks.
 import { readFile, writeFile, mkdir, mkdtemp, rm, stat, readdir, chmod } from 'node:fs/promises';
 import { createHash, createPrivateKey } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -14,9 +15,11 @@ import { applyReleaseRecipes } from '../../mac/patchers/desktop/release-recipes.
 import { acquireDesktopSource } from '../../mac/patchers/desktop/download-original.mjs';
 import { applicationIcon } from '../../windows/patchers/desktop/pe.mjs';
 import { unpackOriginal } from '../../windows/patchers/desktop/original.mjs';
-import { windowsInputs } from '../../windows/patchers/desktop/inputs.mjs';
+import { selectWindowsRelease } from '../../windows/patchers/desktop/inputs.mjs';
+import { withInstallerDiagnostic } from '../../windows/patchers/desktop/input-diagnostic.mjs';
+import { desktopEdges } from '../../mac/clients/desktop/local-services.mjs';
 import { readZip, writeZip, createEntry, entryBytes, signApk, verifyApk, createSigningIdentity, certificateFingerprint } from './apk.mjs';
-import { RENDERER_PATCHES, applyPinnedRendererPatch } from './renderer-patches.mjs';
+import { rendererPatches, applyPinnedRendererPatch } from './renderer-patches.mjs';
 import { checkBuildOutput, writeBuildOutput } from './output.mjs';
 import { verifyShellVersion, verifyClientVersions } from './shell-version.mjs';
 import { normalizeEcPublicKey } from './release-sign.mjs';
@@ -24,7 +27,7 @@ import { normalizeEcPublicKey } from './release-sign.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const androidRoot = path.resolve(here, '..');
 const repo = path.resolve(androidRoot, '..');
-const sharedAssets = ['i18n.mjs', 'external-url.mjs', 'connectors.mjs', 'workspace.css', 'workspace-keys.cjs'];
+const sharedAssets = ['i18n.mjs', 'external-url.mjs', 'connectors.mjs', 'dictation.mjs', 'workspace.css', 'workspace-keys.cjs'];
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 async function hashFile(filename) {
   const hash = createHash('sha256');
@@ -36,25 +39,39 @@ const exists = async filename => { try { await stat(filename); return true; } ca
 // compat.js is a classic script: it runs before every module, so missing built-ins exist first.
 export const BRIDGE_TAGS = '<script src="../client/boot-data.js"></script>\n    <script src="../client/compat.js"></script>\n    <script src="../client/desktop/workspace-keys.js"></script>\n    <script type="module" src="../client/bridge.js"></script>\n    <link rel="stylesheet" href="../client/android.css">\n    <link rel="stylesheet" href="../client/desktop/workspace.css">\n    ';
 const MODULE_ANCHOR = '<script type="module" crossorigin src="./assets/index-';
-const FRAME_ANCHOR = 'frame-src sand-html-preview: sand-canvas: sand-mcp-app:;';
+// 0.71.2 lists sand-html-preview, sand-canvas and sand-mcp-app; 1.1.0 adds sand-visualization.
+const FRAME_ANCHOR = /frame-src sand-html-preview: sand-canvas: sand-mcp-app:(?: sand-[a-z-]+:)*;/g;
 
 /** Inserts the bridge ahead of the renderer and lets the computer view frame load from the shell. */
 export function androidIndexHtml(html) {
-  const at = html.indexOf(MODULE_ANCHOR), frame = html.indexOf(FRAME_ANCHOR);
-  if (at < 0 || html.indexOf(MODULE_ANCHOR, at + 1) >= 0 || frame < 0 || html.indexOf(FRAME_ANCHOR, frame + 1) >= 0)
+  const at = html.indexOf(MODULE_ANCHOR), frames = [...html.matchAll(FRAME_ANCHOR)];
+  if (at < 0 || html.indexOf(MODULE_ANCHOR, at + 1) >= 0 || frames.length !== 1)
     throw new Error('界面入口与支持的版本不一致。');
   return (html.slice(0, at) + BRIDGE_TAGS + html.slice(at))
-    .replace(FRAME_ANCHOR, 'frame-src sand-html-preview: sand-canvas: sand-mcp-app: http://127.0.0.1:*;');
+    .replace(FRAME_ANCHOR, sources => `${sources.slice(0, -1)} http://127.0.0.1:*;`);
 }
 
-/** RPC method names declared by the original preload, as the desktop main process reads them. */
+/** RPC method names of the `main` edge declared by the original preload, as the desktop main process reads them. */
 export function preloadMethods(source) {
-  return [...new Set([...source.matchAll(/([A-Za-z_$][\w$]*):t\(\)\.(?:args|noArgs)/g)].map(match => match[1]))].sort();
+  return [...desktopEdges(source).main].sort();
+}
+
+/** Methods of the other edges (1.1.0 desktop mount panels and Spotlight), which only official windows serve. */
+export function preloadEdges(source) {
+  return Object.fromEntries([...desktopEdges(source).others].map(([edge, methods]) => [edge, [...methods].sort()]));
+}
+
+/** The recommended interface release first, then the fallbacks, each with its pins. */
+export function androidRenderers(build) {
+  const pins = ({ desktopVersion, rendererIndexSha256, preloadSha256, vncPreloadSha256 }) =>
+    ({ desktopVersion, rendererIndexSha256, preloadSha256, vncPreloadSha256 });
+  return [pins(build), ...(build.fallback ?? []).map(pins)];
 }
 
 export function wrapPreload(source) {
   return `// Generated by android/patchers/patch.mjs from the original preload.cjs of the user's download.\n` +
     `export const methods = ${JSON.stringify(preloadMethods(source))};\n` +
+    `export const edges = ${JSON.stringify(preloadEdges(source))};\n` +
     `export default function preload(require, process) {\nconst module = { exports: {} };\n` +
     `(function (module, exports) {\n${source}\n}).call(module.exports, module, module.exports);\n}\n`;
 }
@@ -84,7 +101,7 @@ export async function readPinnedShell(filename, pin) {
 
 // extractAll buffers the entire ASAR. Stage individual reviewed members instead; include existing
 // recipe destinations so the shared replayer still detects collisions with a declared new file.
-export async function stageAndroidArchive(asar, archive, unpacked, recipes, verifyOnly, patches = RENDERER_PATCHES) {
+export async function stageAndroidArchive(asar, archive, unpacked, recipes, verifyOnly, patches) {
   const manifest = JSON.parse(await readFile(path.join(recipes, 'manifest.json'), 'utf8'));
   const members = new Set(asar.listPackage(archive).map(name => name.replaceAll('\\', '/').replace(/^\//, '')));
   const needed = new Set(['dist/renderer/index.html', 'dist/electron-preload/preload.cjs', 'dist/electron-preload/preload-vnc.cjs',
@@ -109,7 +126,7 @@ export async function stageAndroidArchive(asar, archive, unpacked, recipes, veri
 }
 
 // Build and verify replay exactly the same transformations, in scratch. Only a build packages the results.
-export async function verifyStagedRenderer(dist, build, patches = RENDERER_PATCHES) {
+export async function verifyStagedRenderer(dist, build, patches = rendererPatches(build.desktopVersion)) {
   const pinned = async (name, digest) => {
     const bytes = await readFile(path.join(dist, name));
     if (sha(bytes) !== digest) throw new Error(`${name} 与支持的版本不一致。`);
@@ -159,18 +176,19 @@ async function main() {
   const args = process.argv.slice(2);
   const arg = name => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : null; };
   const build = JSON.parse(await readFile(path.join(here, 'supported.json'), 'utf8'));
-  const { directory: windowsDesktop, supported } = await windowsInputs(build.desktopVersion);
+  const renderers = androidRenderers(build), accepted = renderers.map(renderer => renderer.desktopVersion);
   const { versionName, versionCode } = build.shell;
   if (!/^\d+\.\d+\.\d+$/.test(versionName) || !Number.isSafeInteger(versionCode) || versionCode <= 0)
     throw new Error('Invalid Android shell version pin.');
-  const versions = { shell: { versionName, versionCode }, rendererVersion: build.desktopVersion };
   const unsigned = args.includes('--unsigned');
   const base = `GrokBotLocal-${versionName}-android`;
   const apkName = unsigned ? `${base}-unsigned.apk` : `${base}.apk`, reportName = `${base}.patch.json`;
   if (args.includes('--help')) {
-    console.log(`node android/patchers/patch.mjs [--source <Grok_Bot_${supported.version}_Setup.exe | app-64.7z | 安装目录>] [--output <目录>]
-    [--signing-key <文件>] [--shell <外壳 APK>] [--update-url <URL> --update-public-key <SPKI Base64>] [--unsigned] [--force] [--verify-only]
-自开发 Android 外壳 ${versionName}（versionCode ${versionCode}）；Windows renderer ${build.desktopVersion}。省略 --source 时自动下载并校验该版 Windows x64 安装包。
+    const [recommended, ...older] = accepted;
+    console.log(`node android/patchers/patch.mjs [--source <Grok_Bot_${recommended}_Setup.exe | app-64.7z | 安装目录>] [--version <${accepted.join('|')}>]
+    [--output <目录>] [--signing-key <文件>] [--shell <外壳 APK>] [--update-url <URL> --update-public-key <SPKI Base64>] [--unsigned] [--force] [--verify-only]
+自开发 Android 外壳 ${versionName}（versionCode ${versionCode}）；界面推荐取自 Windows renderer ${recommended}${older.length ? `，${recommended} 用不了时再用 ${older.join('、')}` : ''}。
+--source 指定的官方 Windows 原版按摘要自动识别版本；省略 --source 时自动下载并校验 ${recommended}（或 --version 指定的版本）Windows x64 安装包。
 --shell 只接受与发行清单的 SHA-256、包名和版本完全相符的外壳副本。
 --unsigned 仅输出未签名的对齐 APK（供签名服务器使用 release-sign.mjs 统一完成正式签名与清单签发）。
 --update-url / --update-public-key 将自动更新清单地址及 ECDSA P-256 公钥写入构建记录。
@@ -206,9 +224,13 @@ async function main() {
 
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'grokbot-android-patch-'));
   try {
-    const source = await acquireDesktopSource({ source: arg('--source'), cacheDirectory: verifyOnly ? path.join(temporary, 'download') : path.join(androidRoot, '.cache'), supported,
+    const explicitSource = arg('--source');
+    const { directory: windowsDesktop, supported } = await selectWindowsRelease({ source: explicitSource, version: arg('--version'), accepted });
+    const renderer = renderers.find(item => item.desktopVersion === supported.version);
+    const versions = { shell: { versionName, versionCode }, rendererVersion: renderer.desktopVersion };
+    const source = await acquireDesktopSource({ source: explicitSource, cacheDirectory: verifyOnly ? path.join(temporary, 'download') : path.join(androidRoot, '.cache'), supported,
       onDownload: ({ version }) => console.error(`正在下载 Grok Bot ${version} Windows x64 安装包（Android 客户端使用其中的界面）…`) });
-    const app = await unpackOriginal(source, temporary, supported);
+    const app = await withInstallerDiagnostic(unpackOriginal(source, temporary, supported), explicitSource && source, supported, accepted);
     const originalExe = path.join(app, 'Grok Bot.exe'), originalAsar = path.join(app, 'resources/app.asar');
     const exeSha256 = await hashFile(originalExe), asarSha256 = await hashFile(originalAsar);
     if (exeSha256 !== supported.exeSha256 || asarSha256 !== supported.asarSha256)
@@ -219,12 +241,14 @@ async function main() {
     try { asar = createRequire(path.join(repo, 'mac/patchers/desktop/package.json'))('@electron/asar'); }
     catch { throw new Error('缺少 @electron/asar；执行 npm install --prefix mac/patchers/desktop。'); }
     const unpacked = path.join(temporary, 'app');
-    const windowsRecipes = await stageAndroidArchive(asar, originalAsar, unpacked, path.join(windowsDesktop, 'recipes'), verifyOnly);
+    const patches = rendererPatches(renderer.desktopVersion);
+    const windowsRecipes = await stageAndroidArchive(asar, originalAsar, unpacked, path.join(windowsDesktop, 'recipes'), verifyOnly, patches);
     const dist = path.join(unpacked, 'dist');
-    const { preload, vncPreload } = await verifyStagedRenderer(dist, build);
-    const checks = { windowsRecipes, androidRendererPatches: RENDERER_PATCHES.length };
+    const { preload, vncPreload } = await verifyStagedRenderer(dist, renderer, patches);
+    const checks = { windowsRecipes, androidRendererPatches: patches.length };
+    const recommended = renderer.desktopVersion === accepted[0];
     if (verifyOnly) {
-      console.log(JSON.stringify({ verified: true, ...versions, packageName: shell.manifest.packageName, asarSha256, shellSha256: shell.sha256, checks }));
+      console.log(JSON.stringify({ verified: true, ...versions, recommended, packageName: shell.manifest.packageName, asarSha256, shellSha256: shell.sha256, checks }));
       return;
     }
     const outputRoot = path.resolve(arg('--output') ?? path.join(androidRoot, 'output'));
@@ -279,7 +303,7 @@ async function main() {
     const identity = await loadSigningIdentity(signingPath);
     const apk = signApk(unsignedZip, identity);
     const certificate = verifyApk(apk);
-    const installed = verifyClientVersions(readZip(apk).entries, build);
+    const installed = verifyClientVersions(readZip(apk).entries, build, renderer.desktopVersion);
     const manifest = { builtAt, output: apkPath, ...versions, packageName: installed.packageName, checks,
       source, originalAsarSha256: asarSha256, shellSha256: shell.sha256, apkSha256: sha(apk), bytes: apk.length,
       files: files.size, ...(updateConfig ?? {}),

@@ -58,9 +58,15 @@ test('cancelling while the Host transcribes aborts the request', async () => {
 });
 
 test('WAV header sizes follow the PCM length', () => {
-  const wav = pcmWav(Buffer.alloc(10), 8000);
+  const wav = pcmWav(new Uint8Array(10), 8000), view = new DataView(wav.buffer);
   assert.equal(wav.length, 54);
-  assert.equal(wav.readUInt32LE(4), 46);
-  assert.equal(wav.readUInt32LE(28), 16000);
-  assert.equal(wav.readUInt32LE(40), 10);
+  assert.equal(view.getUint32(4, true), 46);
+  assert.equal(view.getUint32(28, true), 16000);
+  assert.equal(view.getUint32(40, true), 10);
+});
+
+test('the module needs no Node built-ins, so the Android WebView shares it', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('../clients/desktop/dictation.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /\bBuffer\b|node:|AbortSignal\.(any|timeout)/);
 });

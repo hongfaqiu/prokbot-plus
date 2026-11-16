@@ -9,7 +9,7 @@ Windows · macOS · iOS 客户端补丁 ｜ [自开发 Android App（非官方�
 <p>
 <!-- client-badges:start -->
   <a href="#client-versions"><img alt="Windows 官方 1.1.0 x64" src="https://img.shields.io/badge/Windows%20%E5%AE%98%E6%96%B9-1.1.0%20x64-0078D4?logo=windows&logoColor=white"></a>
-  <a href="#client-versions"><img alt="Windows 补丁仅接受 1.1.0 x64" src="https://img.shields.io/badge/Windows%20%E8%A1%A5%E4%B8%81%E4%BB%85%E6%8E%A5%E5%8F%97-1.1.0%20x64-237E55?logo=windows&logoColor=white"></a>
+  <a href="#client-versions"><img alt="Windows 补丁接受 1.1.0 x64（推荐）、0.71.2" src="https://img.shields.io/badge/Windows%20%E8%A1%A5%E4%B8%81%E6%8E%A5%E5%8F%97-1.1.0%20x64%EF%BC%88%E6%8E%A8%E8%8D%90%EF%BC%89%E3%80%810.71.2-237E55?logo=windows&logoColor=white"></a>
   <a href="#client-versions"><img alt="macOS 官方 1.1.0 ARM64" src="https://img.shields.io/badge/macOS%20%E5%AE%98%E6%96%B9-1.1.0%20ARM64-111111?logo=apple&logoColor=white"></a>
   <a href="#client-versions"><img alt="iOS 官方 1.25.0" src="https://img.shields.io/badge/iOS%20%E5%AE%98%E6%96%B9-1.25.0-111111?logo=apple&logoColor=white"></a>
   <a href="#client-versions"><img alt="Android shell 1.2.1" src="https://img.shields.io/badge/%E8%87%AA%E5%BC%80%E5%8F%91%20Android-1.2.1-237E55?logo=android&logoColor=white"></a>
@@ -103,14 +103,14 @@ Grok Bot 是 xAI 的 AI 助手应用，有 Windows、Mac、iPhone 等客户端�
 
 <a id="client-versions"></a>
 <!-- client-versions:start -->
-**下载哪个版本的官方安装包？** 按右栏下载，补丁只认这些版本。左栏是官方当前最新版（2026-11-14 核对），比右栏新时要等本项目适配。
+**下载哪个版本的官方安装包？** 按右栏下载，补丁只认这些版本。列了两个版本时先用推荐的新版，用不了再换旧版。左栏是官方当前最新版（2026-11-14 核对），比右栏新时要等本项目适配。
 
 | 平台 | 官方最新版 | 本项目需要的版本 |
 | --- | --- | --- |
-| Windows x64 | [1.1.0](https://api2.cursor.sh/updates/api/download/stable/win32-x64-user/sand) | 1.1.0 |
-| macOS ARM64 | [1.1.0](https://api2.cursor.sh/updates/api/download/stable/darwin-arm64/sand) | 0.71.2（未在 Mac 真机上测试） |
+| Windows x64 | [1.1.0](https://api2.cursor.sh/updates/api/download/stable/win32-x64-user/sand) | **1.1.0**（推荐）；用不了再用 0.71.2 |
+| macOS ARM64 | [1.1.0](https://api2.cursor.sh/updates/api/download/stable/darwin-arm64/sand) | 0.71.2（尚未适配 1.1.0；未在 Mac 真机上测试） |
 | iOS | [1.25.0](https://apps.apple.com/us/app/grok-bot/id6794501026) | 1.16.0（构建 23152；未在 iPhone / iPad 上测试） |
-| Android 9+（自开发，非官方） | 不用官方 Android 版 | App **1.2.1**（构建 10201），界面取自 Windows **0.71.2** 安装包 |
+| Android 9+（自开发，非官方） | 不用官方 Android 版 | App **1.2.1**（构建 10201），界面取自 Windows **1.1.0** 安装包（推荐；用不了再用 0.71.2） |
 | Linux 服务端 | 不适用 | Host `d0a4baa`；Bot 的电脑 `9d2ac1b`（x86_64） |
 
 ProkBot Plus 自己的版本号见[最新发布](https://github.com/ferretgeek/prokbot-plus/releases/latest)；上游 ProkBot 基线是 `3e9fe8c`。
@@ -118,9 +118,9 @@ ProkBot Plus 自己的版本号见[最新发布](https://github.com/ferretgeek/p
 
 | 客户端 | 系统要求 | 测试情况 |
 | --- | --- | --- |
-| Windows | Windows 10 / 11 x64 | 本项目新增。已在 Windows 11 上实测配对、多轮对话、附件、搜索、本机命令、通知和重启后读回记录。提供便携版和安装包，不需要管理员权限。 |
-| Android | Android 9+，系统 WebView 89+（建议 111+） | 本项目自开发，不是官方 Android 版。已在 Android 15 / 16 模拟器上实测配对、多轮真实对话、读回历史和通知权限；还没有真机测试。 |
-| Mac | Apple Silicon | 上游已有的补丁。和 Windows 共用的代码有测试，本项目没有 Mac 真机测试。 |
+| Windows | Windows 10 / 11 x64 | 本项目新增。已在 Windows 11 上实测配对、多轮对话、附件、搜索、本机命令、通知和重启后读回记录；回退用的 0.71.2 版也实测过配对和对话。提供便携版和安装包，不需要管理员权限。 |
+| Android | Android 9+，系统 WebView 89+（建议 111+） | 本项目自开发，不是官方 Android 版。已在 Android 15 / 16 模拟器上实测配对、多轮真实对话、读回历史和通知权限；1.1.0 界面另外实测了 Bot 电脑画面、图片、搜索、深色模式和旧版 WebView。还没有真机测试。 |
+| Mac | Apple Silicon | 上游已有的补丁，仍用官方 0.71.2：Mac 版是单独的程序包，跟进 1.1.0 要另做补丁并在 Mac 上测试，维护者目前没有 Mac。和 Windows 共用的代码有测试，本项目没有 Mac 真机测试。 |
 | iPhone / iPad | 需自备已解密的 IPA 和签名证书 | 上游已有的补丁。补丁工具有测试，本项目没有 iPhone / iPad 真机测试。 |
 | Linux 桌面 | — | 本项目不提供补丁。官方另有 [Linux 客户端](https://docs.x.ai/grok-bot/deployment)，它和服务端里 Bot 用的 Linux 电脑不是一回事。 |
 
@@ -155,7 +155,7 @@ AI 会先列出要准备的东西，再部署服务端、配置模型、生成�
   </tr>
 </table>
 
-上游只有 Mac 和 iOS。Windows 版用官方 1.1.0 Windows 安装包打补丁生成，界面和官方 Windows 版一样：
+上游只有 Mac 和 iOS。Windows 版用官方 1.1.0 Windows 安装包打补丁生成（1.1.0 用不了时可以改用 0.71.2），界面和对应的官方 Windows 版一样：
 
 - 托盘常驻、系统通知、附件、消息搜索、Tailcat；
 - 执行本机命令（PowerShell，中文输出不会乱码），可以把复杂编程交给本机的 Codex；
@@ -171,7 +171,7 @@ AI 会先列出要准备的东西，再部署服务端、配置模型、生成�
 </p>
 <p align="center"><sub>Android 15 模拟器实拍：两轮回复都由连接到自部署 Host 的模型实际生成。</sub></p>
 
-官方 Android 版有防篡改保护，没法改。Plus 换了个做法：把官方桌面版的界面（取自你自己下载的官方 Windows 安装包）装进本项目写的 Android 外壳，生成 APK。
+官方 Android 版有防篡改保护，没法改。Plus 换了个做法：把官方桌面版的界面（取自你自己下载的官方 Windows 安装包，推荐 1.1.0，用不了再用 0.71.2）装进本项目写的 Android 外壳，生成 APK。
 
 - 对话、Bot 管理、技能、资料库、例行任务、设置都是原版界面，按官方手机版的样子重新排版：Bot 列表和对话分成两屏，悬浮按钮、气泡、配色、字体和官方手机版一致，支持返回键和深色模式；
 - 在手机上看 Bot 电脑的实时画面，「取得控制权」后可以用触摸和键盘操作；

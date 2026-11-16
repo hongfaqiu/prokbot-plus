@@ -8,7 +8,7 @@
 
 ## 使用
 
-补丁只接受未经修改的 [Windows x64 **1.1.0** 原版](patchers/desktop/supported.json)，即 2026-11-14 核对时官方稳定通道提供的版本。旧的 0.71.2 安装包会在输入校验时被拒绝，不会进入配对；Android 客户端仍从 0.71.2 安装包生成，见 [Android 说明](../android/README.md)。ProkBot Plus 的发布版本号与 Grok Bot 版本无关。原版安装包只作为输入，无需运行，也不影响已安装的官方客户端。
+推荐使用未经修改的 [Windows x64 **1.1.0** 原版](patchers/desktop/supported.json)，即 2026-11-14 核对时官方稳定通道提供的版本；1.1.0 用不了时再[回退到 0.71.2](#回退到-0712)。其他版本或改动过的安装包会在输入校验时被拒绝，不会进入配对。ProkBot Plus 的发布版本号与 Grok Bot 版本无关。原版安装包只作为输入，无需运行，也不影响已安装的官方客户端。
 
 在仓库根目录执行：
 
@@ -24,7 +24,17 @@ node windows/patchers/desktop/patch.mjs
 | `GrokBotLocal-1.1.0-x64-portable.zip` | 便携压缩包，解压后运行 |
 | `GrokBotLocal-1.1.0-x64-Setup.exe` | 按用户安装到 `%LOCALAPPDATA%\Programs\Grok Bot Local`，无需管理员权限 |
 
-打开客户端，填写 Host 地址和六位配对码。已有原版安装包、`app-64.7z` 或已安装的原版目录时，用 `--source` 指定；`--no-installer` 只生成便携版本。
+打开客户端，填写 Host 地址和六位配对码。已有原版安装包、`app-64.7z` 或已安装的原版目录时，用 `--source` 指定，工具按摘要识别版本；`--no-installer` 只生成便携版本。
+
+### 回退到 0.71.2
+
+1.1.0 版用不了时，退出它，生成 [0.71.2 版](patchers/desktop/0.71.2/supported.json)：
+
+```powershell
+node windows/patchers/desktop/patch.mjs --version 0.71.2 --output windows/output/0.71.2
+```
+
+工具改为下载并校验 `Grok_Bot_0.71.2_Setup.exe`，输出文件名中的版本号变为 0.71.2。已下载的 0.71.2 安装包也可以用 `--source` 指定。两个版本共用配对和设置，不要同时运行。0.71.2 版是官方旧版的界面。
 
 安装包支持 `/S`（静默）和 `/D=目录`（放在最后）。常规安装可在「设置 → 应用」中卸载，也可运行安装目录中的 `Uninstall Grok Bot Local.exe`。新卸载器会保留配对、设置及个人文件。
 
@@ -55,7 +65,7 @@ $old = Join-Path $env:LOCALAPPDATA 'Programs\Grok Bot Local'
 
 - `patchers/desktop/original.mjs`：从官方安装包中切出 `app-64.7z` 并解压，Android 补丁也用它。
 - `tools/desktop-recipes/`：`build.mjs` 按 `spec.mjs` 中的锚点修改，从官方 1.1.0 安装包重新生成 `patchers/desktop/recipes/`；锚点必须在原文件中唯一。`extensions/` 是追加到原版模块里的本项目代码。加 `--check` 时只校验已提交的 recipe 能逐字节重现。
-- `patchers/desktop/0.71.2/`：Android 客户端仍在使用的 0.71.2 固定输入和 recipe。`tools/port-desktop-recipes.mjs` 由同一版本的 Mac recipe 和两个平台的原版生成这组 recipe，并校验每段复制内容的结构一致。
+- `patchers/desktop/0.71.2/`：回退版本 0.71.2 的固定输入和 recipe，Windows 回退和 Android 的 0.71.2 界面共用。补丁按 `supported.json` 中的大小和 SHA-256 识别 `--source` 的版本，新增回退版本时按版本号建同样的目录。`tools/port-desktop-recipes.mjs` 由同一版本的 Mac recipe 和两个平台的原版生成这组 recipe，并校验每段复制内容的结构一致。
 - `installer/`：安装器源码（仅 Go 标准库），`go build -trimpath -ldflags="-H=windowsgui -s -w" -o ../dist/installer/grokbot-setup-stub.exe .`
 - `dist/network/grokbot-tailcat.exe`：`python host/network/build-tailcat.py --target windows-amd64 --output windows/dist/network`
 - 测试：`node --test "windows/tests/*.test.mjs"`

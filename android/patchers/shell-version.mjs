@@ -87,13 +87,13 @@ export function verifyShellVersion(entries, expected) {
   return actual;
 }
 
-export function verifyClientVersions(entries, build) {
+export function verifyClientVersions(entries, build, rendererVersion = build.desktopVersion) {
   const actual = verifyShellVersion(entries, build.shell);
   const records = entries.filter(entry => entry.name === 'assets/web/client/build.json');
   if (records.length !== 1) throw new Error('Expected exactly one Android client build record.');
   const record = JSON.parse(entryBytes(records[0]).toString('utf8'));
   if (record.shell?.versionName !== actual.versionName || record.shell.versionCode !== actual.versionCode ||
-      record.rendererVersion !== build.desktopVersion) throw new Error('Android client build record version mismatch.');
+      record.rendererVersion !== rendererVersion) throw new Error('Android client build record version mismatch.');
   return actual;
 }
 

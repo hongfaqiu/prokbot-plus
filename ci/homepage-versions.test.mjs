@@ -5,82 +5,86 @@ import { readVersions, render } from './homepage-versions.mjs';
 
 const middle = '<!-- client-badges:end -->\r\n<p>unrelated edit</p>\r\n<!-- client-versions:start -->';
 const fixture = `<p>before</p>\n<!-- client-badges:start -->\n${middle}\n<!-- client-versions:end -->\n<p>after</p>\n`;
-const windowsCopy = {
-  zh: { official: 'Windows 官方', input: 'Windows 补丁仅接受', incompatible: '与此补丁不兼容',
-    unsupported: '此补丁不支持', rejected: '补丁在输入校验时拒绝了该安装包；未测试原生客户端聊天' },
-  en: { official: 'Windows official', input: 'Windows patch accepts only', incompatible: 'incompatible with this patch',
-    unsupported: 'not supported by this patch', rejected: 'installer rejected during input verification; no native chat test' },
+const copy = {
+  zh: { official: 'Windows 官方', input: 'Windows 补丁接受', unsupported: '此补丁不支持',
+    accepted: (pin, older) => older.length ? `${pin} x64（推荐）、${older.join('、')}` : `${pin} x64`,
+    needs: (pin, older) => older.length ? `**${pin}**（推荐）；用不了再用 ${older.join('、')}` : pin },
+  en: { official: 'Windows official', input: 'Windows patch accepts', unsupported: 'not supported by this patch',
+    accepted: (pin, older) => older.length ? `${pin} x64 (recommended), ${older.join(', ')}` : `${pin} x64`,
+    needs: (pin, older) => older.length ? `**${pin}** (recommended); ${older.join(', ')} if it does not work` : pin },
 };
 
-// Keep the historical test case independent of the rolling snapshot and build pins.
-async function researchedWindows() {
+// Keep the cases independent of the rolling snapshot and build pins.
+async function fixtureData() {
   const data = await readVersions();
-  data.win.version = data.android.desktopVersion = '0.71.2';
-  data.win.archive.sha256 = 'be14f2f2067d86334360f5d4f7c94515886ef795df25645aa883d3983c4ab4aa';
-  data.snap.windows = { version: '1.1.0', build: '83d46d618ef4c12afa17edd8e3c29d6caf046d17',
-    observedArchiveSha256: '01ccb10f2144ea0eb787042c54fc4b8ca2c6f43eccb7dabe5fe5eb86fa5ed044',
-    observedAsarSha256: 'ae8f0a14fe65f421881f96fdcb66aaaaed8b28806f79d5239dbefec9ef2ea972' };
-  data.checkedWindows = { ...data.snap.windows, archiveBytes: 127403656,
-    testedAgainst: { version: '0.71.2', sha256: data.win.archive.sha256 } };
+  data.win = { ...data.win, version: '1.1.0', archive: { ...data.win.archive, sha256: 'a'.repeat(64) } };
+  data.winFallback = [{ ...data.win, version: '0.71.2', archive: { ...data.win.archive, sha256: 'b'.repeat(64) } }];
+  data.snap = { ...data.snap, windows: { ...data.snap.windows, version: '1.1.0', observedArchiveSha256: 'a'.repeat(64) } };
   return data;
 }
 
-function assertWindows(page, lang, observed, accepted, badgeNote = '', tableNote = badgeNote) {
+function assertWindows(page, lang, observed, data, note = '') {
   const lines = page.split('<!-- client-badges:start -->')[1].split('<!-- client-badges:end -->')[0].trim().split('\n');
-  const { official, input } = windowsCopy[lang];
-  const expected = [[official, `${observed} x64${badgeNote ? ` (${badgeNote})` : ''}`], [input, `${accepted} x64`]];
+  const { official, input, accepted, needs } = copy[lang], older = data.winFallback.map(item => item.version);
+  const expected = [[official, `${observed} x64${note ? ` (${note})` : ''}`], [input, accepted(data.win.version, older)]];
   for (const [i, [label, value]] of expected.entries()) {
     const img = /<a href="#client-versions"><img alt="([^"]+)" src="(https:\/\/img\.shields\.io\/badge\/[^"]+)">/.exec(lines[i]);
     assert.ok(img, `missing ${label} badge at position ${i + 1}`);
     assert.equal(img[1], `${label} ${value}`);
     assert.equal(decodeURIComponent(new URL(img[2]).pathname).replace(/-[\da-f]{6}$/i, ''), `/badge/${label}-${value}`);
   }
-  const note = tableNote ? (lang === 'zh' ? `（${tableNote}）` : ` (${tableNote})`) : '';
+  const tableNote = note ? (lang === 'zh' ? `（${note}）` : ` (${note})`) : '';
   const row = page.split('\n').find(line => line.startsWith('| Windows x64 |'));
-  assert.equal(row, `| Windows x64 | [${observed}](https://api2.cursor.sh/updates/api/download/stable/win32-x64-user/sand)${note} | ${accepted} |`);
+  assert.equal(row, `| Windows x64 | [${observed}](https://api2.cursor.sh/updates/api/download/stable/win32-x64-user/sand)${tableNote} | ${needs(data.win.version, older)} |`);
 }
 
-test('the researched Windows installer is incompatible with the pinned patch, not a failed native chat test', async () => {
-  const data = await researchedWindows();
-  for (const [lang, copy] of Object.entries(windowsCopy))
-    assertWindows(render(fixture,lang,data), lang, '1.1.0', '0.71.2', copy.incompatible, copy.rejected);
+test('the official installer of the recommended or a fallback release shows no warning', async () => {
+  const data = await fixtureData();
+  for (const lang of Object.keys(copy)) assertWindows(render(fixture,lang,data), lang, '1.1.0', data);
+  data.snap.windows = { ...data.snap.windows, version: '0.71.2', observedArchiveSha256: 'b'.repeat(64) };
+  for (const lang of Object.keys(copy)) assertWindows(render(fixture,lang,data), lang, '0.71.2', data);
 });
 
-test('matching official and accepted versions show both badges without rejection or a runtime claim', async () => {
-  const data = await researchedWindows();
-  for (const version of ['1.1.0','99.2.1']) {
-    data.win.version = data.snap.windows.version = data.android.desktopVersion = version;
-    data.win.archive.sha256 = data.snap.windows.observedArchiveSha256;
-    for (const lang of Object.keys(windowsCopy)) assertWindows(render(fixture,lang,data), lang, version, version);
+test('a newer release, a repack or a fingerprint mismatch is marked unsupported', async () => {
+  const data = await fixtureData();
+  const cases = [{ version: '1.2.0' }, { observedArchiveSha256: '0'.repeat(64) }, { observedArchiveSha256: undefined },
+    { version: '0.71.2' } /* the recommended release's bytes under the fallback's number */];
+  for (const change of cases) {
+    const changed = { ...data, snap: { ...data.snap, windows: { ...data.snap.windows, ...change } } };
+    for (const [lang, { unsupported }] of Object.entries(copy))
+      assertWindows(render(fixture,lang,changed), lang, changed.snap.windows.version, changed, unsupported);
   }
 });
 
-test('a different build, repack, source fingerprint or patch pin does not inherit the researched verdict', async () => {
-  const data = await researchedWindows();
-  const observations = [{ build: '0'.repeat(40) }, { observedArchiveSha256: '0'.repeat(64) },
-    { observedAsarSha256: '0'.repeat(64) }, { observedArchiveSha256: undefined }];
-  const cases = observations.map(change => ({ ...data, snap: { ...data.snap, windows: { ...data.snap.windows, ...change } } }));
-  cases.push({ ...data, win: { ...data.win, version: '0.90.0' } },
-    { ...data, win: { ...data.win, archive: { ...data.win.archive, sha256: '0'.repeat(64) } } });
-  for (const changed of cases) {
-    for (const [lang, copy] of Object.entries(windowsCopy))
-      assertWindows(render(fixture,lang,changed), lang, changed.snap.windows.version, changed.win.version, copy.unsupported);
+test('without a fallback the patch shows a single accepted Windows release', async () => {
+  const data = await fixtureData();
+  data.winFallback = []; data.androidFallback = [];
+  for (const lang of Object.keys(copy)) {
+    const page = render(fixture,lang,data);
+    assertWindows(page, lang, '1.1.0', data);
+    assert.ok(!page.split('\n').some(line => /^\| (Windows|Android)/.test(line) && line.includes('0.71.2')));
   }
 });
 
-test('a repack carrying the supported version number is not advertised as a matching input', async () => {
-  const data = await researchedWindows();
-  data.snap.windows.version = data.win.version;
-  for (const [lang, copy] of Object.entries(windowsCopy))
-    assertWindows(render(fixture,lang,data), lang, data.win.version, data.win.version, copy.unsupported);
+test('Android names its interface release and fallback; Mac notes a newer official release', async () => {
+  const data = await fixtureData();
+  data.android = { ...data.android, desktopVersion: '1.1.0' }; data.androidFallback = ['0.71.2'];
+  data.mac = { ...data.mac, version: '0.71.2' }; data.snap.mac = { ...data.snap.mac, version: '1.1.0' };
+  const zh = render(fixture,'zh',data), en = render(fixture,'en',data);
+  assert.ok(zh.includes('界面取自 Windows **1.1.0** 安装包（推荐；用不了再用 0.71.2）'));
+  assert.ok(en.includes('interface taken from the Windows **1.1.0** installer (recommended; 0.71.2 if it does not work)'));
+  assert.ok(zh.includes('| 0.71.2（尚未适配 1.1.0；未在 Mac 真机上测试） |'));
+  assert.ok(en.includes('| 0.71.2 (not yet adapted to 1.1.0; not tested on a Mac) |'));
+  data.snap.mac.version = '0.71.2';
+  assert.ok(render(fixture,'en',data).includes('| 0.71.2 (not tested on a Mac) |'));
 });
 
 test('vendor observation does not promote supported client, shell, or cloud inputs', async () => {
-  const data = await researchedWindows();
+  const data = await fixtureData();
   const newer = structuredClone(data); newer.snap.windows.version = '99.2.1'; newer.android.shell.versionName = '2.7.0';
   for (const lang of ['zh','en']) {
     const rendered = render(fixture,lang,newer);
-    assertWindows(rendered, lang, '99.2.1', data.win.version, windowsCopy[lang].unsupported);
+    assertWindows(rendered, lang, '99.2.1', data, copy[lang].unsupported);
     assert.ok(rendered.includes(`**2.7.0**`)); assert.ok(rendered.includes(`Windows **${data.android.desktopVersion}**`));
     assert.ok(rendered.includes(data.host)); assert.ok(rendered.includes(data.box));
     assert.equal(render(rendered,lang,newer),rendered);

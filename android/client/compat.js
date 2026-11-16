@@ -262,6 +262,15 @@
     }
   }
 
+  // moveBefore (Chromium 133): the 1.1.0 interface moves preview frames with it. A plain
+  // insertBefore moves the node too; only the frame's state is not kept (it reloads).
+  if (typeof Element === 'function' && !('moveBefore' in Element.prototype)) {
+    var moveBefore = function moveBefore(node, child) { return this.insertBefore(node, child); };
+    define(Element.prototype, 'moveBefore', moveBefore, 'Element.prototype.moveBefore');
+    if (typeof DocumentFragment === 'function') define(DocumentFragment.prototype, 'moveBefore', moveBefore, 'DocumentFragment.prototype.moveBefore');
+    if (typeof Document === 'function') define(Document.prototype, 'moveBefore', moveBefore, 'Document.prototype.moveBefore');
+  }
+
   // ---- startup check -----------------------------------------------------------------------
 
   var userAgent = (global.navigator && global.navigator.userAgent) || '';

@@ -14,6 +14,8 @@ node patchers/desktop/patch.mjs
 
 工具自动下载并校验 0.71.2 Apple Silicon 原版，生成 `output.noindex/Grok Bot.app`。移入「应用程序」，填写 Host 地址和六位配对码。
 
+官方 Mac 版已经更新到 1.1.0，但这里仍然固定为 0.71.2。Windows 的 1.1.0 补丁不能直接用于 Mac：Mac 版是单独的程序包，要另做补丁，并在 Mac 上测试安装、签名和本机图形界面控制，维护者目前没有 Mac。0.71.2 仍可从官方地址下载，补丁会核对它的完整摘要。
+
 已有原版 `.app` 或 `.dmg` 时，可增加 `--source "/path/to/Grok Bot.app"`。
 
 `--verify-only` 在临时目录回放固定版本的补丁，不生成客户端。手动指定的 DMG 也检查完整 SHA-256；Mac 上还会验证输入 App 的原签名。维护者没有 Mac 测试设备，本轮未在 macOS 上验证安装、启动、配对或聊天。可接受的原包和官方最新版本分别见[首页版本表](../README.md#client-versions)。

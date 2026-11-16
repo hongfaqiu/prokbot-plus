@@ -70,10 +70,10 @@ python3 host/deploy.py status < /dev/null
 
 | Client | Pinned input and guide inside its package |
 | --- | --- |
-| Windows 10/11 x64 | Windows ZIP: `windows/README.en.md`. Build a portable client or installer from the official 1.1.0 x64 installer. Keep the shared `mac/` directory in the same package. |
-| Mac (Apple Silicon) | Mac ZIP: `mac/README.en.md`. Use the official Apple Silicon 0.71.2 original. Local graphical control also requires suitable signing and OS permissions. |
+| Windows 10/11 x64 | Windows ZIP: `windows/README.en.md`. Build a portable client or installer from the official 1.1.0 x64 installer by default; if 1.1.0 does not work, add `--version 0.71.2` to use 0.71.2. Keep the shared `mac/` directory in the same package. |
+| Mac (Apple Silicon) | Mac ZIP: `mac/README.en.md`. Use the official Apple Silicon 0.71.2 original (the Mac patch does not support 1.1.0 yet). Local graphical control also requires suitable signing and OS permissions. |
 | iPhone | iOS ZIP: the Signing section of `ios/README.en.md`. Supply a decrypted 1.16.0 (23152) IPA and follow `extension-signing.json` to configure signing for the main app and each of its three extensions. |
-| Android 9+ | Android ZIP: `android/README.en.md`. Build an APK from the official Windows 0.71.2 installer (not the 1.1.0 installer the Windows client uses) and the project shell, not the official Android APK. Back up your signing key separately; upgrades need the same key. |
+| Android 9+ | Android ZIP: `android/README.en.md`. Build an APK from the interface in the official Windows 1.1.0 installer (the same file as the Windows client) and the project shell by default; add `--version 0.71.2` if the 1.1.0 interface does not work. The official Android APK is not used. Back up your signing key separately; upgrades need the same key. |
 
 See the [client version table](../README.en.md#client-versions) before obtaining originals. The store and stable feeds can move ahead of the patches; the tools require the inputs in the right column. The Android shell has its own app version, separate from the renderer and minimum OS version.
 

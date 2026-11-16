@@ -24,7 +24,7 @@ ProkBot Plus 是 ProkBot（https://gitee.com/ahaduoduoduo/ProkBot ，基于提�
 | --- | --- |
 | `host/` | 服务端：`release/` 构建与部署，`server/` 管理服务和管理网页，`runtime/` 注入原版 Host 的运行时（模型适配、联网与图片、自动审查、可靠性层），`tools/host-admin.mjs` 命令行管理，`network/` Tailcat 源码，`tests/` |
 | `mac/` | `clients/desktop/` 是桌面客户端主进程，**Mac 和 Windows 共用**，Android 也复制其中三个文件；其中的 `*-settings-extension.js` 没有被代码引用，但它们是 0.71.2 recipe 加进原版设置页的代码的源码，不要当成无用文件删除。`patchers/desktop/` 是 Mac 补丁和原版下载器（含 vendored `node_modules`） |
-| `windows/` | Windows 补丁（固定官方 1.1.0）、安装器源码（Go）、预编译的 Tailcat 和安装器 stub、`tests/`。`tools/desktop-recipes/` 按 `spec.mjs` 的锚点修改生成 1.1.0 recipe，`extensions/` 是 recipe 追加进原版模块的代码的源码；`patchers/desktop/0.71.2/` 是 Android 仍在用的旧版输入和由 Mac recipe 移植的 recipe |
+| `windows/` | Windows 补丁（推荐官方 1.1.0，可回退 0.71.2）、安装器源码（Go）、预编译的 Tailcat 和安装器 stub、`tests/`。`tools/desktop-recipes/` 按 `spec.mjs` 的锚点修改生成 1.1.0 recipe，`extensions/` 是 recipe 追加进原版模块的代码的源码；`patchers/desktop/0.71.2/` 是回退版本的输入和由 Mac recipe 移植的 recipe，Windows 回退和 Android 的 0.71.2 界面共用 |
 | `ios/` | iOS 注入库源码、字节码补丁数据、IPA 补丁工具 |
 | `android/` | `shell/` 是 Android 外壳（Kotlin），`dist/` 是它的预编译 APK；`client/` 是 WebView 里代替 Electron 的桥接；`patchers/` 是生成和签名 APK 的工具；`tests/`。解压官方安装包的代码与 Windows 共用（`windows/patchers/desktop/original.mjs`） |
 | `docs/` | 部署手册、技术文档、README 截图 |
@@ -87,7 +87,7 @@ python3 ios/tests/ios-network.test.py      # iOS 网络层 1 项，只能在装�
    - `android windows mac`（Android 补丁依赖 `windows/` 和 `mac/`）。
 
    `git archive` 会保留可执行权限。
-3. 生成 `SHA256SUMS.txt`。把每个包解压到独立目录跑测试；Windows 包用官方 1.1.0、Android 包用官方 0.71.2 Windows 安装包各执行一次 `patch.mjs --source <安装包> --verify-only`。
+3. 生成 `SHA256SUMS.txt`。把每个包解压到独立目录跑测试；Windows 包和 Android 包都分别用官方 1.1.0 和 0.71.2 Windows 安装包各执行一次 `patch.mjs --source <安装包> --verify-only`。
 4. `gh release create v<版本> --target main --title "ProkBot Plus <版本>" --notes-file <中英双语说明> <5 个 zip> SHA256SUMS.txt`。
 
    **不要附带打好补丁的客户端。**

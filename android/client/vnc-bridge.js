@@ -10,6 +10,12 @@
   const listeners = new Map();
   const post = message => window.parent.postMessage({ grokbotWebview: 1, ...message }, appOrigin);
   const evaluate = code => (0, eval)(code);
+  const insertCSS = css => {
+    const style = document.createElement('style');
+    style.textContent = String(css);
+    (document.head ?? document.documentElement).append(style);
+    return '';
+  };
 
   window.addEventListener('message', event => {
     if (event.source !== window.parent || event.origin !== appOrigin) return;
@@ -24,9 +30,7 @@
         try { listener({ sender: null }, ...(Array.isArray(message.args) ? message.args : [])); } catch {}
       }
     } else if (message.type === 'css') {
-      const style = document.createElement('style');
-      style.textContent = message.css;
-      (document.head ?? document.documentElement).append(style);
+      insertCSS(message.css);
     }
   });
 
@@ -49,7 +53,8 @@
   };
   const electron = {
     ipcRenderer,
-    webFrame: { executeJavaScript: code => Promise.resolve().then(() => evaluate(code)), insertCSS() {} },
+    // The preload hides the noVNC toolbar and status overlay through insertCSS.
+    webFrame: { executeJavaScript: code => Promise.resolve().then(() => evaluate(code)), insertCSS },
     contextBridge: { exposeInMainWorld: (name, api) => { window[name] = api; } },
   };
   window.__grokbotVncPreload = {

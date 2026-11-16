@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join, relative } from 'node:path';
 import { inspectRecipe } from './recipe-pin.mjs';
-import { windowsInputs } from '../windows/patchers/desktop/inputs.mjs';
+import { windowsInputs, windowsReleases } from '../windows/patchers/desktop/inputs.mjs';
 import { readZip } from '../android/patchers/apk.mjs';
 import { verifyShellVersion } from '../android/patchers/shell-version.mjs';
 
@@ -63,17 +63,29 @@ async function checkDesktop(dir) {
 const desktopPins = {};
 for (const name of ['mac', 'windows']) {
   const { original, pins } = await checkDesktop(`${name}/patchers/desktop`);
-  desktopPins[name] = pins;
+  desktopPins[`${name}/patchers/desktop`] = { original, pins };
   versions[name] = original.version;
 }
+// Older Windows releases the patch still builds (the fallback), each in a directory named after its version.
+const windowsFallback = [];
+for (const { directory, supported } of (await windowsReleases()).slice(1)) {
+  const dir = relative(root, directory).replaceAll('\\', '/');
+  desktopPins[dir] = await checkDesktop(dir);
+  windowsFallback.push(supported.version);
+}
+versions.windowsFallback = windowsFallback;
 const android = await json('android/patchers/supported.json');
-const androidInputs = relative(root, (await windowsInputs(android.desktopVersion)).directory).replaceAll('\\', '/');
-const androidPins = androidInputs === 'windows/patchers/desktop' ? desktopPins.windows : (await checkDesktop(androidInputs)).pins;
-assert.equal(androidPins.get('dist/renderer/index.html')?.output, android.rendererIndexSha256, 'stale Android renderer index');
-assert.equal(androidPins.get('dist/electron-preload/preload.cjs')?.output, android.preloadSha256, 'stale Android preload');
+for (const build of [android, ...(android.fallback ?? [])]) {
+  const dir = relative(root, (await windowsInputs(build.desktopVersion)).directory).replaceAll('\\', '/');
+  const { original, pins } = desktopPins[dir] ?? (desktopPins[dir] = await checkDesktop(dir));
+  const where = `Android interface ${build.desktopVersion}`;
+  assert.equal(pins.get('dist/renderer/index.html')?.output, build.rendererIndexSha256, `${where}: stale renderer index`);
+  assert.equal(pins.get('dist/electron-preload/preload.cjs')?.output ?? original.preloadSha256, build.preloadSha256, `${where}: stale preload`);
+  assert.match(build.vncPreloadSha256, /^[0-9a-f]{64}$/);
+}
 assert.equal(await sha(android.shell.path), android.shell.sha256, 'Android shell digest mismatch');
 const shell = verifyShellVersion(readZip(await bytes(android.shell.path)).entries, android.shell);
 const ios = await json('ios/recipes/ios/manifest.json');
 await checkRecipes('ios/recipes/ios', ios.resources, 'patch', ios.hbcSha256);
 assert.equal(await sha('ios/bin/GrokBotLocal.dylib'), ios.dylibSha256, 'iOS injected library digest mismatch');
-console.log(JSON.stringify({ ...versions, androidShell: `${shell.versionName} (${shell.versionCode})`, androidRenderer: android.desktopVersion, ios: `${ios.version} (${ios.build})` }, null, 2));
+console.log(JSON.stringify({ ...versions, androidShell: `${shell.versionName} (${shell.versionCode})`, androidRenderer: [android.desktopVersion, ...(android.fallback ?? []).map(item => item.desktopVersion)].join(', '), ios: `${ios.version} (${ios.build})` }, null, 2));

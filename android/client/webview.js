@@ -27,7 +27,20 @@ export function mapDesktopSource(src, { hostOrigin, vncOrigin, tailcat = false, 
   }
 }
 
-export function installWebviewFrames({ hostOrigin, vncOrigin, tailcat = false }) {
+/** Puts the ticket into both the page address and the socket path inside it. */
+export function withDesktopTicket(src, ticket) {
+  const url = new URL(src);
+  url.searchParams.set('ticket', ticket);
+  const socket = url.searchParams.get('path');
+  if (socket) {
+    const path = new URL(socket, url);
+    path.searchParams.set('ticket', ticket);
+    url.searchParams.set('path', path.pathname + path.search);
+  }
+  return url.href;
+}
+
+export function installWebviewFrames({ hostOrigin, vncOrigin, tailcat = false, desktopTicket }) {
   const frames = new Map();
   let nextId = 1;
   const pending = new Map();
@@ -55,6 +68,25 @@ export function installWebviewFrames({ hostOrigin, vncOrigin, tailcat = false })
     }
   });
 
+  // The address may come from a box status read long ago; its ticket can have expired.
+  const refreshTicket = async src => {
+    const slot = /^\/vnc\/(desktop|fork)\//.exec(new URL(src).pathname)?.[1];
+    if (!slot || !desktopTicket || !new URL(src).searchParams.has('ticket')) return src;
+    const request = new AbortController();
+    const timer = setTimeout(() => request.abort(), 5000);
+    try {
+      const ticket = await desktopTicket(slot, request.signal);
+      return ticket ? withDesktopTicket(src, ticket) : src;
+    } catch (error) {
+      log('[webview] desktop ticket', error?.message ?? String(error));
+      return src;
+    } finally { clearTimeout(timer); }
+  };
+  const navigate = async (frame, next) => {
+    const address = next === 'about:blank' ? next : await refreshTicket(next);
+    if (frame.dataset.src === next) frame.src = address;
+  };
+
   const post = (element, message) => {
     const target = element.__grokbotFrame?.contentWindow;
     if (!target || !element.__grokbotReady) return false;
@@ -80,7 +112,7 @@ export function installWebviewFrames({ hostOrigin, vncOrigin, tailcat = false })
       if (frame.dataset.src === next) return;
       frame.dataset.src = next;
       element.__grokbotReady = false;
-      frame.src = next;
+      void navigate(frame, next);
     };
     frame.addEventListener('load', () => {
       if (frame.dataset.src === 'about:blank') return;
@@ -102,7 +134,7 @@ export function installWebviewFrames({ hostOrigin, vncOrigin, tailcat = false })
         element.__grokbotReady = false;
         frame.dataset.src = 'about:blank';
         frame.src = 'about:blank';
-        setTimeout(() => { frame.dataset.src = current; frame.src = current; }, 0);
+        setTimeout(() => { frame.dataset.src = current; void navigate(frame, current); }, 0);
       },
       isCrashed: () => false,
       getURL: () => frame.dataset.src ?? '',

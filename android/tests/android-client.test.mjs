@@ -18,7 +18,7 @@ const repo = path.resolve(here, '../..');
 async function loadClient() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'grokbot-android-client-'));
   await cp(path.join(repo, 'android/client'), root, { recursive: true });
-  for (const name of ['i18n.mjs', 'external-url.mjs', 'connectors.mjs'])
+  for (const name of ['i18n.mjs', 'external-url.mjs', 'connectors.mjs', 'dictation.mjs'])
     await cp(path.join(repo, 'mac/clients/desktop', name), path.join(root, 'desktop', name));
   const load = name => import(pathToFileURL(path.join(root, name)).href);
   return { root, services: await load('services.js'), webview: await load('webview.js'), gateway: await load('gateway.js'),
@@ -331,6 +331,9 @@ test('the interface entry gets the bridge before the renderer and may frame the 
   assert.ok(result.indexOf(BRIDGE_TAGS) < result.indexOf('./assets/index-abc.js'));
   // The policy sits ahead of the module script; it must still be extended.
   assert.match(result, /frame-src sand-html-preview: sand-canvas: sand-mcp-app: http:\/\/127\.0\.0\.1:\*;/);
+  // 1.1.0 lists one more preview scheme.
+  assert.match(androidIndexHtml(html.replace('sand-mcp-app:;', 'sand-mcp-app: sand-visualization:;')),
+    /frame-src sand-html-preview: sand-canvas: sand-mcp-app: sand-visualization: http:\/\/127\.0\.0\.1:\*;/);
   assert.throws(() => androidIndexHtml(html.replace('frame-src', 'child-src')), /不一致/);
   assert.throws(() => androidIndexHtml(html.replace('</head>', '<script type="module" crossorigin src="./assets/index-x.js"></script></head>')), /不一致/);
 });
@@ -366,12 +369,16 @@ test('the original preloads run as CommonJS inside their wrappers', async () => 
 });
 
 test('renderer patches apply only to the pinned files and replace unique anchors', () => {
-  assert.equal(patchRendererFile('assets/unrelated.js', Buffer.from('x')), null);
-  for (const patch of RENDERER_PATCHES) {
-    assert.match(patch.sha256, /^[0-9a-f]{64}$/);
-    assert.throws(() => patchRendererFile(patch.file, Buffer.from('not the pinned file')), /不一致/);
-    for (const [from, to] of patch.edits) assert.notEqual(from, to);
+  for (const [version, patches] of Object.entries(RENDERER_PATCHES)) {
+    assert.equal(patchRendererFile('assets/unrelated.js', Buffer.from('x'), version), null);
+    assert.ok(patches.length > 0, version);
+    for (const patch of patches) {
+      assert.match(patch.sha256, /^[0-9a-f]{64}$/);
+      assert.throws(() => patchRendererFile(patch.file, Buffer.from('not the pinned file'), version), /不一致/);
+      for (const [from, to] of patch.edits) assert.notEqual(from, to);
+    }
   }
+  assert.throws(() => patchRendererFile('assets/unrelated.js', Buffer.from('x'), '0.70.0'), /没有 Windows 0\.70\.0/);
 });
 
 test('attachments from the Host are remote paths, never local files', () => {
@@ -402,6 +409,32 @@ test('only computer view pages of the paired Host load in the webview frame', ()
   const tailcatOptions = { ...options, hostOrigin: () => 'tailcat://connect/tcExample?port=8000', tailcat: () => true };
   assert.equal(new URL(mapDesktopSource('http://127.0.0.1:41234/vnc/desktop/vnc.html', tailcatOptions)).origin, options.vncOrigin);
   assert.equal(mapDesktopSource('https://127.0.0.1:41234/vnc/desktop/vnc.html', tailcatOptions), null);
+});
+
+test('the computer view swaps in a current ticket for an address read long ago', async t => {
+  const { withDesktopTicket } = client.webview;
+  const old = 'http://127.0.0.1:39720/vnc/fork/vnc.html?path=%2Fvnc%2Ffork%2Fwebsockify%3Ftoken%3D2%26ticket%3Dold&encrypt=0&ticket=old';
+  const fresh = new URL(withDesktopTicket(old, 'new'));
+  assert.equal(fresh.searchParams.get('ticket'), 'new');
+  assert.equal(fresh.searchParams.get('path'), '/vnc/fork/websockify?token=2&ticket=new');
+  assert.equal(fresh.searchParams.get('encrypt'), '0');
+
+  const gw = client.gateway.createGateway(), calls = [];
+  const box = ticket => ({ state: 'running', vncUrl: `http://host.test/vnc/fork/vnc.html?ticket=${ticket}`,
+    windows: [{ vncUrl: `http://host.test/vnc/fork/vnc.html?ticket=${ticket}` }] });
+  t.mock.method(globalThis, 'fetch', async (url, { body }) => {
+    calls.push([url, JSON.parse(body)]);
+    return Response.json(url === '/api/getSubagents' ? [] : box(calls.length === 1 ? 'old' : 'new'));
+  });
+  // Unknown until a box status names the Bot that owns the slot.
+  assert.equal(await gw.desktopTicket('fork'), null);
+  await gw.command('getForeverBoxStatus', { id: 'bot-1' });
+  await gw.command('getSubagents', { id: 'bot-2' });
+  assert.equal(await gw.desktopTicket('fork'), 'new');
+  assert.equal(await gw.desktopTicket('desktop'), null);
+  assert.deepEqual(calls.map(([url, args]) => `${url} ${args.id}`),
+    ['/api/getForeverBoxStatus bot-1', '/api/getSubagents bot-2', '/api/getForeverBoxStatus bot-1']);
+  gw.close();
 });
 
 test('server-sent events are parsed across chunk boundaries', async () => {

@@ -78,6 +78,24 @@ test('promise helpers and structured cloning behave like the native versions', a
   assert.throws(() => run('structuredClone(Symbol())'), /could not be cloned/);
 });
 
+test('moveBefore falls back to insertBefore, and a native one stays', () => {
+  const dom = `
+    globalThis.Element = class Element { insertBefore(node, child) { this.moved = [node, child]; return node; } };
+    globalThis.DocumentFragment = class DocumentFragment { insertBefore(node) { return node; } };
+    globalThis.Document = class Document { insertBefore(node) { return node; } };`;
+  const context = vm.createContext({ navigator: { userAgent: 'Chrome/124.0.0.0', language: 'en' }, URL, crypto, structuredClone });
+  vm.runInContext(dom, context);
+  vm.runInContext(source, context);
+  assert.equal(vm.runInContext('const parent = new Element(), node = {}; parent.moveBefore(node, null) === node && parent.moved[0] === node && parent.moved[1] === null', context), true);
+  assert.deepEqual([...vm.runInContext('__grokbotCompat.added', context)],
+    ['Element.prototype.moveBefore', 'DocumentFragment.prototype.moveBefore', 'Document.prototype.moveBefore']);
+
+  const current = vm.createContext({ navigator: { userAgent: 'Chrome/134.0.0.0', language: 'en' }, URL, crypto, structuredClone });
+  vm.runInContext(dom + 'globalThis.native = Element.prototype.moveBefore = function moveBefore() {};', current);
+  vm.runInContext(source, current);
+  assert.equal(vm.runInContext('Element.prototype.moveBefore === native && __grokbotCompat.added.length', current), 0);
+});
+
 test('a current WebView keeps every native built-in', () => {
   const context = vm.createContext({ navigator: { userAgent: 'Chrome/134.0.0.0', language: 'en' },
     URL, crypto, structuredClone });

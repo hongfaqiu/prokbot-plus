@@ -27,6 +27,10 @@ Modifications made in ProkBot Plus (2026-11-07 to 2026-11-16)
      mapping (gateway.mjs) and startup defaults. The 0.71.2 Windows inputs
      moved to windows/patchers/desktop/0.71.2/ for the Android client, and the
      earlier 1.1.0 research replays under windows/tools/compat/ were removed.
+   - In 1.3.0, 0.71.2 became the Windows fallback: inputs.mjs lists the
+     recommended release and the fallbacks and recognizes an input by size
+     and SHA-256, patch.mjs gained --version, and known-unsupported.json was
+     removed.
    - On 2026-11-14, added explicit incompatible-input diagnostics, corrected
      desktop/Android connection lifecycle handling and preserved desktop
      settings on save failures. No official code is included.
@@ -109,6 +113,12 @@ Modifications made in ProkBot Plus (2026-11-07 to 2026-11-16)
      installer (ZIP writing, APK Signature Scheme v2 signing with a key created
      for the user) and applies a few verified changes to the original
      interface (renderer-patches.mjs).
+   - In 1.3.0, the interface comes from the Windows 1.1.0 installer by
+     default, with 0.71.2 as a fallback (supported.json, renderer-patches.mjs
+     per release). The bridge adds 1.1.0 dictation and startup defaults, a
+     fresh computer view ticket on each load (gateway.js, webview.js),
+     insertCSS for the VNC page, a moveBefore fallback (compat.js) and phone
+     layouts for the 1.1.0 dialogs (android.css).
    - windows/patchers/desktop/original.mjs: extraction of the official
      installer moved out of patch.mjs so the Android patcher can share it.
    - android/tests/ (new).
@@ -182,6 +192,10 @@ ProkBot Plus 1.2.1 (2026-11-16): android/client/compat.js adds built-in
 functions missing from older Android System WebView builds before the
 interface and the pairing page run, and explains a page that did not start
 instead of leaving it blank.
+
+ProkBot Plus 1.3.0 (2026-11-16): Windows and Android default to the official
+1.1.0 interface and fall back to 0.71.2 (items 1 and 10). The Host is
+unchanged. Official programs and generated clients are not distributed.
 
 Third-party components
 ----------------------

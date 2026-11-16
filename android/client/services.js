@@ -4,6 +4,7 @@
 import { grokText } from './desktop/i18n.mjs';
 import { externalHttpUrl } from './desktop/external-url.mjs';
 import { createConnectorHandlers } from './desktop/connectors.mjs';
+import { createDictation } from './desktop/dictation.mjs';
 import { boot as androidBoot, native, log, toBase64, fromBase64, toBytes, timeout, combineSignals } from './native.js';
 
 export const auth = {
@@ -438,9 +439,11 @@ export function createServices(context) {
     ...profile.handlers,
     ...createConnectorHandlers({ command, openExternal: url => native('open-external', { url }) }),
     getLinkMetadata: () => null,
+    // 0.71.2 sends a finished recording; 1.1.0 streams it through the dictation methods.
     transcribeAudio: ({ audio, mimeType, language: spoken }) => request('/local/audio/transcriptions', {
       audioBase64: toBase64(audio), mimeType, ...(spoken ? { language: spoken } : {}),
     }, timeout(120000)),
+    ...createDictation({ request, emit: value => emit('dictation-text', value) }),
     openSelfHostedConnection: () => context.showConnection(),
     loginCursor: () => context.showConnection(),
     addCursorAccount: () => context.showConnection(),
@@ -450,6 +453,9 @@ export function createServices(context) {
     uploadGrokBotAgentFile: ({ agentId, fileName, contentType, bytes }) => request('/local/files',
       { agentId, fileName, contentType, base64: toBase64(bytes) }, timeout(60000)),
     deleteGrokBotAgentFile: async ({ agentId, name }) => { await request('/local/files', { agentId, name }, timeout(15000), 'DELETE'); },
+    // 1.1.0 also lists files a cloud Bot keeps per user; Host Bots keep only their library.
+    listGrokBotUserStoreFiles: () => ({ files: [] }),
+    deleteGrokBotUserStoreFile: () => null,
     getAutoReviewInstructions: async () => (await command('getHostSettings')).autoReviewInstructions ?? { isEnabled: false, allowInstructions: [], blockInstructions: [] },
     setAutoReviewInstructions: async ({ instructions }) => {
       await command('setHostSettings', { autoReviewInstructions: instructions });
@@ -493,11 +499,13 @@ export function createServices(context) {
     getSandAccessFresh: () => access,
     getGrokBotTermsRecord: () => ({ seenAtMs: Date.now(), version: 1 }),
     getWindowState: () => ({ isMaximized: true, isFullScreen: false, isFullscreen: false, isFocused: document.hasFocus() }),
+    isWindowShown: () => document.visibilityState === 'visible',
     minimizeWindow: () => null,
     focusWindow: () => null,
     closeWindow: () => null,
     toggleMaximizeWindow: () => null,
     getEgressTunnelEnabled: () => false,
+    getEgressTunnelForcedByAdmin: () => false,
     getWebauthnProxyEnabled: () => false,
     getEgressTunnelStatus: () => boot.egressTunnelStatus,
     // The desktop claims its egress tunnel when a Bot computer view opens; there is none here.
@@ -560,7 +568,15 @@ export function createServices(context) {
     },
     getCredentialsState: () => ({ connections: [], credentials: [], catalogRevision: 'local' }),
     getCursorPrivacyModeEnabled: () => false,
+    getCursorStorageAllowed: () => false,
     getCursorUnifyCta: () => null,
+    // The original signed-out answers: nothing is offered and nothing is sent to a cloud account.
+    getCursorTrainingOptIn: () => 'unavailable',
+    getCursorTrainingSetting: () => 'signed-out',
+    getCursorBonfireStatus: () => ({ kind: 'ineligible' }),
+    getLocalPitmanState: () => ({ isRecorderReady: false, session: null }),
+    getPendingRestartToUpdate: () => null,
+    getMicrosoftTeamsAccountLinkStatus: () => ({ links: [], teamEnablement: null }),
     getCurrentMachineMessagesEnabled: () => false,
     listSecrets: () => [],
     listMeetings: () => [],
