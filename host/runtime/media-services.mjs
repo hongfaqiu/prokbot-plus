@@ -87,7 +87,8 @@ export class MediaServices {
       if (submit) {
         result = await submitMedia(provider, model, body, combined);
         if (result.id) {
-          check(typeof result.id === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(result.id), 502, 'Invalid provider job ID');
+          check(typeof result.id === 'string' && /^[A-Za-z0-9_.-]{1,200}$/.test(result.id) && !result.id.includes('..'),
+            502, 'Invalid provider job ID');
           await this.update(job.id, { providerJobId: result.id, status: 'processing' });
           await onRequestId?.(result.id);
         }

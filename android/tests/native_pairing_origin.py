@@ -17,7 +17,7 @@ def main():
     if not stdlib or not stdlib.is_file() or not sdk.is_file(): p.error('Android API 36 and cached Kotlin stdlib required')
     jdk=Path(os.environ['JAVA_HOME'])/'bin';ext='.exe' if os.name=='nt' else ''
     with tempfile.TemporaryDirectory(prefix='prokbot-native-origin-') as tmp:
-        cp=os.pathsep.join(map(str,[tmp,classes,stdlib,sdk]));sources=sorted((tests/'native-pairing').glob('*.java'))
+        cp=os.pathsep.join(map(str,[tmp,classes,stdlib,sdk]));sources=sorted((tests/'native-pairing').rglob('*.java'))
         subprocess.run([str(jdk/('javac'+ext)),'-J-Xms16m','-J-Xmx128m','--add-modules','jdk.httpserver','-cp',cp,'-d',tmp,*map(str,sources)],check=True,timeout=35)
         subprocess.run([str(jdk/('java'+ext)),'-Xms16m','-Xmx96m','--add-modules','jdk.httpserver','-cp',cp,'dev.grokbot.local.PairingOriginProbe'],check=True,timeout=30)
 

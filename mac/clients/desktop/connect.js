@@ -37,6 +37,8 @@ const setAuthMode = nextMode => {
   const isPassword = authMode === 'password';
   keyGroup.hidden = isPassword;
   passwordGroup.hidden = !isPassword;
+  key.disabled = isPassword;
+  password.disabled = !isPassword;
   modeCode.classList?.toggle('active', !isPassword);
   modePassword.classList?.toggle('active', isPassword);
   modeCode.setAttribute?.('aria-pressed', String(!isPassword));
@@ -46,7 +48,11 @@ const setAuthMode = nextMode => {
 setAuthMode('code');
 modeCode.addEventListener('click', () => { if (!connect.disabled) { setAuthMode('code'); key.focus?.(); } });
 modePassword.addEventListener('click', () => { if (!connect.disabled) { setAuthMode('password'); password.focus?.(); } });
-tailcat.onchange = () => { server.placeholder = tailcat.checked ? 'tailcat://connect/…' : 'https://bot.example.com'; updateRetry(); };
+tailcat.onchange = () => {
+  server.type = tailcat.checked ? 'text' : 'url';
+  server.placeholder = tailcat.checked ? 'tailcat://connect/…' : 'https://bot.example.com';
+  updateRetry();
+};
 server.addEventListener('input', updateRetry);
 const tidyKey = () => { key.value = normalizePairingCode(key.value); updateRetry(); };
 key.addEventListener('input', event => { if (!event.isComposing) tidyKey(); });

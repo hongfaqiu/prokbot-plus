@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mediaInput, sizeForAspect, submitMedia } from '../server/media-providers.mjs';
-import { describeMediaModels } from '../server/media-settings.mjs';
+import { analyzeVideo, collectMedia, mediaInput, pollMedia, sizeForAspect, submitMedia } from '../server/media-providers.mjs';
+import { describeMediaModels, validateMediaSettings } from '../server/media-settings.mjs';
 import { WebServices } from '../runtime/web-services.mjs';
 
 const json = (status, value) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
@@ -145,4 +145,57 @@ test('other Anthropic web tool errors are not retried', async t => {
   const requests = stubFetch(t, [() => json(400, { error: { message: 'invalid model' } })]);
   await assert.rejects(new WebServices(directory).invoke('fetch', 'https://example.com/'), /HTTP 400/);
   assert.equal(requests.length, 1);
+});
+
+test('OpenAI video models submit, poll with dotted IDs, and collect MP4 bytes', async t => {
+  const mp4 = Buffer.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]);
+  const requests = stubFetch(t, [
+    () => json(200, { id: 'video_grok.abc.123', status: 'queued' }),
+    () => json(200, { id: 'video_grok.abc.123', status: 'in_progress', progress: 50 }),
+    () => json(200, { id: 'video_grok.abc.123', status: 'completed', progress: 100 }),
+    () => new Response(mp4, { status: 200, headers: { 'content-type': 'video/mp4' } }),
+  ]);
+  const provider = { id: 'v', name: 'V', adapter: 'openai-videos', baseUrl: 'https://api.example.com/v1', apiKey: 'secret', enabled: true };
+  const model = { id: 'vid', providerId: 'v', model: 'grok/grok-imagine-video', kind: 'video', enabled: true, name: 'Video', description: 'd', parameters: { seconds: 8 } };
+  validateMediaSettings({ providers: [provider], models: [model], defaults: { video: 'vid' } });
+  const body = mediaInput(model, { prompt: 'ocean wave', aspectRatio: '16:9',
+    references: [{ mimeType: 'image/png', data: 'iVBORw0KGgo=' }] }, 'openai-videos');
+  const submitted = await submitMedia(provider, model, body);
+  assert.equal(submitted.id, 'video_grok.abc.123');
+  assert.equal(requests[0].url, 'https://api.example.com/v1/videos');
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    seconds: 8, prompt: 'ocean wave', size: '1280x720', model: 'grok/grok-imagine-video',
+    input_reference: 'data:image/png;base64,iVBORw0KGgo=',
+  });
+  const polled = await pollMedia(provider, submitted.id, undefined, { intervalMs: 1 });
+  assert.equal(requests[1].url, 'https://api.example.com/v1/videos/video_grok.abc.123');
+  assert.equal(requests[3].url, 'https://api.example.com/v1/videos/video_grok.abc.123/content');
+  assert.equal(requests[3].options.headers.authorization, 'Bearer secret');
+  const outputs = await collectMedia(polled, 'video');
+  assert.equal(outputs.length, 1);
+  assert.equal(outputs[0].mimeType, 'video/mp4');
+  assert.deepEqual(outputs[0].bytes, mp4);
+});
+
+test('OpenAI video frames adapter extracts frames and sends them to chat completions', async t => {
+  const requests = stubFetch(t, [
+    () => json(200, { choices: [{ message: { content: 'A cat walks across the room.' } }] }),
+  ]);
+  const provider = { id: 'vf', name: 'VF', adapter: 'openai-video-frames', baseUrl: 'https://api.example.com/v1', apiKey: 'k', enabled: true };
+  const watch = { id: 'w', providerId: 'vf', model: 'grok/grok-4.7', kind: 'watchVideo', enabled: true, name: 'Watch', description: 'd', parameters: { maxFrames: 4 } };
+  const review = { id: 'r', providerId: 'vf', model: 'codex/gpt-6-luna', kind: 'videoReview', enabled: true, name: 'Review', description: 'd', parameters: { maxFrames: 4 } };
+  validateMediaSettings({ providers: [provider], models: [watch, review], defaults: { watchVideo: 'w', videoReview: 'r' } });
+  const result = await analyzeVideo(provider, watch, {
+    prompt: 'What happens?', mimeType: 'video/mp4', videoBase64: 'AAAA',
+  }, undefined, async (_b64, _mime, opts) => {
+    assert.equal(opts.maxFrames, 4);
+    return ['data:image/jpeg;base64,/9j/1', 'data:image/jpeg;base64,/9j/2'];
+  });
+  assert.equal(result.text, 'A cat walks across the room.');
+  assert.equal(requests[0].url, 'https://api.example.com/v1/chat/completions');
+  const sent = JSON.parse(requests[0].options.body);
+  assert.equal(sent.model, 'grok/grok-4.7');
+  assert.equal(sent.maxFrames, undefined);
+  assert.equal(sent.messages[0].content.length, 3);
+  assert.equal(sent.messages[0].content[1].image_url.url, 'data:image/jpeg;base64,/9j/1');
 });

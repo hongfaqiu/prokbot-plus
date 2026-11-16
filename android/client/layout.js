@@ -179,7 +179,15 @@ function updatePhone() {
     if (title && top.dataset.grokbotTitle !== title) top.dataset.grokbotTitle = title;
     else if (!title && top.dataset.grokbotTitle !== undefined) delete top.dataset.grokbotTitle;
   }
-  if (isPhone()) addMarketplaceEntry();
+  if (phone.screen === 'chat' && !current && !newChat && listed.size > 0 && now - phone.shownAt > 2000) {
+    setScreen('list');
+  }
+  if (isPhone()) {
+    for (const element of [document.documentElement, document.body, chat, document.querySelector('.sand-virtual-transcript')]) {
+      if (element && element.scrollLeft !== 0) element.scrollLeft = 0;
+    }
+    addMarketplaceEntry();
+  }
 }
 
 /**

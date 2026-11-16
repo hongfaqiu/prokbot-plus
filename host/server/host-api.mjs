@@ -5,7 +5,7 @@ import { validateAgentId } from "./library.mjs";
 export async function deleteAgentsWithLibrary(
   request,
   response,
-  { hostUrl, internalToken, library },
+  { hostUrl, internalToken, library, automationWebhooks },
 ) {
   const body = await jsonBody(request);
   check(
@@ -32,6 +32,9 @@ export async function deleteAgentsWithLibrary(
     return sendJson(response, 502, { error: "Host 暂不可用，请稍后重试" });
   }
   const value = await upstream.json();
-  if (upstream.ok) await library.removeAgents(body.ids);
+  if (upstream.ok) {
+    await library.removeAgents(body.ids);
+    await automationWebhooks?.removeAgents(body.ids);
+  }
   sendJson(response, upstream.status, value);
 }

@@ -13,6 +13,7 @@ import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.view.View
@@ -25,7 +26,9 @@ import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -48,6 +51,9 @@ class MainActivity : Activity() {
         private set
     private var pausedAtMs = 0L
     private var debugging = false
+    @Volatile private var pendingWebRecovery = false
+    @Volatile private var lastLoadStartedMs = 0L
+    @Volatile private var autoRecoveryAttempted = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -90,12 +96,19 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         app.inForeground = true
-        val awayMs = if (pausedAtMs > 0L) (android.os.SystemClock.elapsedRealtime() - pausedAtMs).coerceAtLeast(0L) else 0L
+        val awayMs = if (pausedAtMs > 0L) (SystemClock.elapsedRealtime() - pausedAtMs).coerceAtLeast(0L) else 0L
         pausedAtMs = 0L
+        web.onResume()
         NotificationService.sync(app)
         NotificationService.syncForeground(app, true)
         app.push.onForegroundChanged(true)
-        emit("focus", JSONObject().put("focused", true).put("awayMs", awayMs))
+        if (pendingWebRecovery) {
+            pendingWebRecovery = false
+            load(page)
+        } else {
+            verifyWebViewHealthy()
+            emit("focus", JSONObject().put("focused", true).put("awayMs", awayMs))
+        }
     }
 
     override fun onPause() {
@@ -136,7 +149,7 @@ class MainActivity : Activity() {
 
     private var page = Page.CONNECTION
 
-    private fun load(next: Page) {
+    private fun load(next: Page, resetRecovery: Boolean = true) {
         val hasInterface = try { assets.list("web/renderer")?.contains("index.html") == true } catch (_: Exception) { false }
         if (!hasInterface) {
             val message = getString(R.string.missing_interface)
@@ -146,6 +159,9 @@ class MainActivity : Activity() {
             return
         }
         page = next
+        if (resetRecovery) autoRecoveryAttempted = false
+        pendingWebRecovery = false
+        lastLoadStartedMs = SystemClock.elapsedRealtime()
         if (next == Page.CONNECTION) app.viewingAgentId = null
         val gateway = app.gateway
         CookieManager.getInstance().setCookie(gateway.appOrigin, gateway.cookie) {
@@ -208,7 +224,52 @@ class MainActivity : Activity() {
         web.destroy()
         web = createWebView()
         container.addView(web, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-        load(page)
+        val dark = systemDark()
+        applyChrome(dark, if (dark) "#111111" else "#ffffff")
+        container.requestApplyInsets()
+        if (app.inForeground) load(page, resetRecovery = false)
+        else pendingWebRecovery = true
+    }
+
+    private fun verifyWebViewHealthy() {
+        val startedMs = lastLoadStartedMs
+        if (startedMs <= 0L || SystemClock.elapsedRealtime() - startedMs < 4_000L) return
+        val expectedPath = page.path
+        val checkScript = if (page == Page.WORKSPACE) {
+            "(() => { if (document.getElementById('grokbot-compat-message')) return 'ok'; " +
+                "const r = document.getElementById('root'); " +
+                "return document.readyState === 'complete' && (!r || !r.firstElementChild) ? 'blank' : 'ok'; })()"
+        } else {
+            "(() => { if (document.getElementById('grokbot-compat-message')) return 'ok'; " +
+                "return document.readyState === 'complete' && window.__grokbotStarted !== true && !document.getElementById('form') ? 'blank' : 'ok'; })()"
+        }
+        val currentWeb = web
+        currentWeb.evaluateJavascript(checkScript) { result ->
+            if (currentWeb === web && result?.trim('"') == "blank" && !autoRecoveryAttempted) {
+                Log.w(TAG, "Detected blank WebView on resume for $expectedPath; reloading")
+                autoRecoveryAttempted = true
+                load(page, resetRecovery = false)
+            }
+        }
+    }
+
+    private fun showLoadError(detail: String) {
+        val dark = systemDark()
+        val bg = if (dark) "#111111" else "#ffffff"
+        val fg = if (dark) "#eeeeee" else "#111111"
+        val muted = if (dark) "#aaaaaa" else "#666666"
+        val title = android.text.Html.escapeHtml(Text.t(this, "界面加载失败", "Failed to load interface"))
+        val retry = android.text.Html.escapeHtml(Text.t(this, "重新加载", "Reload"))
+        val escaped = android.text.Html.escapeHtml(detail)
+        val targetUrl = org.json.JSONObject.quote(app.gateway.appOrigin + page.path)
+        val html = "<!doctype html><meta name=viewport content='width=device-width'>" +
+            "<body style='margin:0;padding:48px 24px;font:16px/1.6 system-ui,sans-serif;background:$bg;color:$fg'>" +
+            "<h1 style='font-size:20px;margin:0 0 12px'>$title</h1>" +
+            "<p style='margin:0 0 20px;color:$muted'>$escaped</p>" +
+            "<button type=button onclick=\"location.replace($targetUrl)\" " +
+            "style='display:block;width:100%;padding:12px;border-radius:10px;font:inherit;border:1px solid $muted;background:transparent;color:$fg'>$retry</button>" +
+            "</body>"
+        web.loadDataWithBaseURL(app.gateway.appOrigin, html, "text/html", "utf-8", null)
     }
 
     private inner class Client : WebViewClient() {
@@ -224,6 +285,30 @@ class MainActivity : Activity() {
             }
             if (uri.scheme == "http" || uri.scheme == "https" || uri.scheme == "mailto") app.openExternal(uri)
             return true
+        }
+
+        override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+            if (view !== web || !request.isForMainFrame) return
+            if (!request.url.toString().startsWith(app.gateway.appOrigin)) return
+            Log.w(TAG, "Main frame load error (${error.errorCode}): ${error.description}")
+            if (!autoRecoveryAttempted) {
+                autoRecoveryAttempted = true
+                web.postDelayed({ load(page, resetRecovery = false) }, 250)
+            } else {
+                showLoadError(error.description?.toString() ?: "Error ${error.errorCode}")
+            }
+        }
+
+        override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
+            if (view !== web || !request.isForMainFrame) return
+            if (!request.url.toString().startsWith(app.gateway.appOrigin)) return
+            Log.w(TAG, "Main frame HTTP ${errorResponse.statusCode} for ${request.url.path}")
+            if (!autoRecoveryAttempted) {
+                autoRecoveryAttempted = true
+                web.postDelayed({ load(page, resetRecovery = false) }, 250)
+            } else {
+                showLoadError("HTTP ${errorResponse.statusCode} ${errorResponse.reasonPhrase}")
+            }
         }
 
         override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {

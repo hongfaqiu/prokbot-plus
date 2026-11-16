@@ -36,6 +36,16 @@ export async function serviceJson(url, { apiKey, signal, body, form, method, lim
   catch (error) { if (error.status) throw error; throw new HttpError(502, 'Service returned invalid JSON'); }
   check(data && typeof data === 'object', 502, 'Service returned invalid JSON'); return data;
 }
+export async function serviceBytes(url, { apiKey, signal, method = 'GET', limit = 64 * 1024 * 1024 } = {}) {
+  const response = await fetch(url, { method, redirect: 'error', signal,
+    headers: { accept: 'video/*,image/*,application/octet-stream,*/*',
+      ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) } });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw Object.assign(new HttpError(502, `Service returned HTTP ${response.status}`), { upstreamStatus: response.status });
+  }
+  return boundedBody(response, limit);
+}
 
 function publicAddress(address) {
   const value = address.toLowerCase();

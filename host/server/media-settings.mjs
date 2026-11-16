@@ -6,7 +6,7 @@ import { serviceUrl, serviceJson, checkSchema } from './media-http.mjs';
 export const mediaDefaults = Object.freeze({ version: 1, providers: [], models: [],
   defaults: { image: '', video: '', watchVideo: '', videoReview: '' } });
 const kinds = ['image', 'video', 'watchVideo', 'videoReview'];
-const adapters = ['wavespeed', 'openai-images', 'http-json'];
+const adapters = ['wavespeed', 'openai-images', 'openai-videos', 'openai-video-frames', 'http-json'];
 const id = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}$/.test(value);
 const text = (value, max) => typeof value === 'string' && value.length <= max && !/[\0\r\n]/.test(value);
 
@@ -41,6 +41,8 @@ export function validateMediaSettings(input, previous = mediaDefaults) {
     checkSchema(defaults, { ...item.inputSchema, required: [] });
     const provider = providers.find(candidate => candidate.id === item.providerId);
     check(provider.adapter !== 'openai-images' || item.kind === 'image', 400, 'OpenAI Images only supports image generation');
+    check(provider.adapter !== 'openai-videos' || item.kind === 'video', 400, 'OpenAI Videos only supports video generation');
+    check(provider.adapter !== 'openai-video-frames' || ['watchVideo', 'videoReview'].includes(item.kind), 400, 'OpenAI Video Frames only supports watchVideo and videoReview');
     check(provider.adapter !== 'wavespeed' || ['image', 'video'].includes(item.kind), 400, 'Use an analysis adapter for video understanding');
     check(!item.enabled || provider.adapter !== 'wavespeed' || item.inputSchema?.type === 'object', 400, 'Refresh the WaveSpeed model schema before enabling it');
     return { id: item.id, providerId: item.providerId, model: item.model, kind: item.kind, enabled: item.enabled,

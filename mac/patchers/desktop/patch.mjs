@@ -173,8 +173,8 @@ try {
     // directory. Sign each native binary first so hardened-runtime library
     // validation sees the same developer identity throughout the bundle.
     for (const filename of (await nativeFiles(path.join(output, 'Contents'))).sort((a, b) => b.length - a.length))
-      run('codesign', ['--force', '--sign', signingIdentity, '--timestamp=none', filename], { timeout: 20000 });
-    run('codesign', ['--force', '--deep', '--sign', signingIdentity, '--options', 'runtime', '--timestamp=none', '--entitlements', entitlements, output], { timeout: 20000 });
+      run('codesign', ['--force', '--sign', signingIdentity, '--timestamp=none', filename], { timeout: 120000 });
+    run('codesign', ['--force', '--deep', '--sign', signingIdentity, '--options', 'runtime', '--timestamp=none', '--entitlements', entitlements, output], { timeout: 120000 });
     run('codesign', ['--verify', '--deep', '--strict', output]);
     if (await hash(asarPath) !== asarSha256) throw new Error('原版文件意外变化。');
     const iconUnchanged = await hash(path.join(app, 'Contents/Resources/icon.icns')) === await hash(path.join(outResources, 'icon.icns'));

@@ -73,6 +73,7 @@ export function providerDialog(panel, { adapters, save, act }) {
     const adapter = form.elements.adapter.value;
     model.parentElement.hidden = !['responses-search', 'anthropic-tools'].includes(adapter);
     const known = { wavespeed: 'https://api.wavespeed.ai', 'openai-images': 'https://api.openai.com/v1',
+      'openai-videos': 'https://api.openai.com/v1', 'openai-video-frames': 'https://api.openai.com/v1',
       'deepseek-tools': 'https://api.deepseek.com', 'responses-search': 'https://api.openai.com/v1',
       'anthropic-tools': 'https://api.anthropic.com/v1' };
     if (!selected || !form.elements.baseUrl.value) form.elements.baseUrl.value = known[adapter] || '';

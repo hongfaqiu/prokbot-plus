@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cp, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
@@ -601,4 +601,21 @@ test('Android connect page supports switching between pairing code and Host admi
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(pairPayloads[1], { server: 'https://host.example', password: 'AdminSecret123', edit: false });
   assert.equal(getEl('#password').value, '');
+});
+
+test('android.css and MainActivity guard against phone horizontal overflow and WebView blank screens', async () => {
+  const [css, layoutSrc, activitySrc] = await Promise.all([
+    readFile(path.join(repo, 'android/client/android.css'), 'utf8'),
+    readFile(path.join(repo, 'android/client/layout.js'), 'utf8'),
+    readFile(path.join(repo, 'android/shell/app/src/main/java/dev/grokbot/local/MainActivity.kt'), 'utf8'),
+  ]);
+  assert.match(css, /html\.grokbot-phone \.sand-virtual-transcript\s*\{[^}]*overflow-x:\s*clip\s*!important/);
+  assert.match(css, /html\.grokbot-phone \.sand-message-prose :is\(p, li, code, a\)\s*\{[^}]*overflow-wrap:\s*anywhere/);
+  assert.match(css, /html\.grokbot-android \.sand-chat\s*\{[^}]*--sand-chat-min-width:\s*0px/);
+  assert.match(layoutSrc, /scrollLeft\s*=\s*0/);
+  assert.match(layoutSrc, /phone\.screen === 'chat' && !current && !newChat && listed\.size > 0/);
+  assert.match(activitySrc, /pendingWebRecovery/);
+  assert.match(activitySrc, /verifyWebViewHealthy/);
+  assert.match(activitySrc, /onReceivedError/);
+  assert.match(activitySrc, /onReceivedHttpError/);
 });

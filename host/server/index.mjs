@@ -21,6 +21,12 @@ import { ExecutionNode } from './execution-node.mjs';
 import { TailcatNetwork, tailcatAdmin } from './tailcat.mjs';
 import { Plugins } from './plugins.mjs';
 import { Webhooks } from './webhooks.mjs';
+import {
+  AutomationWebhooks,
+  hasWebhookTrigger,
+  resolveAutomationWebhookCredential,
+  resolveWebhookOrigin,
+} from './automation-webhooks.mjs';
 import { Sharing } from './sharing.mjs';
 import { rewriteSharingUrls } from './sharing-api.mjs';
 import { Federation } from './federation.mjs';
@@ -114,6 +120,8 @@ export async function createSelfHostServer(options = {}) {
   const canonical = publicUrl ? endpoint(publicUrl).origin : null;
   const requestOrigin = (request) =>
     originFor(request, network.isIngress(request) || isDirectLoopback(request) ? "" : canonical);
+  const webhookOrigin = (request, origin) =>
+    resolveWebhookOrigin({ canonical, requestOrigin: origin, isIngress: network.isIngress(request) });
   const hostDataDir = resolve(
     options.hostDataDir ??
       process.env.GROKBOT_HOST_DATA_DIR ??
@@ -166,6 +174,7 @@ export async function createSelfHostServer(options = {}) {
   const plugins = await new Plugins(dataDir, { connectors, skills, hostCall: internalHostClient(hostUrl, internalToken) }).load();
   const applications = await new Applications({ connectors, plugins, hostCall: internalHostClient(hostUrl, internalToken) }).load();
   const webhooks = await new Webhooks(dataDir).load();
+  const automationWebhooks = await new AutomationWebhooks(dataDir).load();
   const sharing = await new Sharing(dataDir, { skills, plugins, profile, publicUrl: canonical,
     hostCall: internalHostClient(hostUrl, internalToken) }).load();
   const notifications = await new Notifications(dataDir, { onPublish: item => push.enqueue(item) }).load();
@@ -496,12 +505,43 @@ export async function createSelfHostServer(options = {}) {
       const result = await webhooks.receive(request, hook[1], path);
       return sendJson(response, result.duplicate ? 200 : 202, result);
     }
+    const automationHook = /^\/automations\/webhook\/([a-f0-9-]{36})$/.exec(path);
+    if (automationHook && request.method === 'POST') {
+      const result = await automationWebhooks.receive(request, automationHook[1], {
+        verifyAutomation: async (agentId, localId) => {
+          let list;
+          try {
+            list = await internalHostClient(hostUrl, internalToken)('getAgentAutomations', { id: agentId });
+          } catch (error) {
+            if (error instanceof HttpError && error.status < 500) return { exists: false, enabled: false };
+            throw new HttpError(503, 'Host temporarily unavailable');
+          }
+          const item = Array.isArray(list) ? list.find(candidate => candidate.id === localId) : null;
+          if (!item || !hasWebhookTrigger(item.trigger)) return { exists: false, enabled: false };
+          return { exists: true, enabled: Boolean(item.isEnabled), name: item.name, createdAt: item.createdAt };
+        },
+      });
+      return sendJson(response, 202, result);
+    }
     if (request.method === 'POST' && path.startsWith('/internal/webhooks/')) {
       check(internalToken && equal(bearer(request), internalToken), 401, 'Invalid internal credential');
       const body = await jsonBody(request);
       if (path === '/internal/webhooks/claim') return sendJson(response, 200, await webhooks.claim(body.worker));
       if (path === '/internal/webhooks/finish') return sendJson(response, 200, await webhooks.finish(body));
       throw new HttpError(404, 'Unknown webhook operation');
+    }
+    if (request.method === 'POST' && path.startsWith('/internal/automation-webhooks/')) {
+      check(internalToken && equal(bearer(request), internalToken), 401, 'Invalid internal credential');
+      const body = await jsonBody(request);
+      if (path === '/internal/automation-webhooks/credential') {
+        check(typeof body?.agentId === 'string' && typeof body?.localId === 'string', 400, 'Invalid request');
+        return sendJson(response, 200, await automationWebhooks.ensureCredential({
+          agentId: body.agentId, localId: body.localId, createdAt: body.createdAt,
+        }));
+      }
+      if (path === '/internal/automation-webhooks/claim') return sendJson(response, 200, await automationWebhooks.claim(body.worker));
+      if (path === '/internal/automation-webhooks/finish') return sendJson(response, 200, await automationWebhooks.finish(body));
+      throw new HttpError(404, 'Unknown automation webhook operation');
     }
     if (request.method === 'POST' && path.startsWith('/internal/sharing/')) {
       check(internalToken && equal(bearer(request), internalToken), 401, 'Invalid internal credential');
@@ -731,7 +771,19 @@ export async function createSelfHostServer(options = {}) {
           hostUrl,
           internalToken,
           library,
+          automationWebhooks,
         });
+      if (path === '/api/getAutomationWebhookCredential') {
+        const input = await jsonBody(request, 64000);
+        return sendJson(response, 200, await resolveAutomationWebhookCredential({
+          automationWebhooks,
+          agentId: input?.id,
+          localId: input?.automationId,
+          verifyAgent,
+          hostCall: internalHostClient(hostUrl, internalToken),
+          origin: webhookOrigin(request, origin),
+        }));
+      }
       return proxyHttp(request, response, {
         target: hostUrl,
         path: `${path}${url.search}`,
@@ -809,6 +861,7 @@ export async function createSelfHostServer(options = {}) {
     executionNode,
     plugins, applications,
     webhooks,
+    automationWebhooks,
     sharing,
     federation,
     network,
@@ -861,6 +914,7 @@ export async function createSelfHostServer(options = {}) {
         executionNode.store.tail,
         plugins.store.tail, plugins.operations,
         webhooks.store.tail,
+        automationWebhooks.store.tail,
         sharing.store.tail,
         mediaSettings.store.tail, webSettings.store.tail, mediaServices.store.tail,
       ]);

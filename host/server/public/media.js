@@ -13,7 +13,7 @@ export function createMediaEditor({ api, act }) {
   let config, catalog = [], currentModel;
   async function save(next) { config = await api('/admin/api/media', { method: 'PUT', body: next }); render(); }
   const editProvider = providerDialog(panel, {
-    adapters: [['wavespeed', 'WaveSpeed'], ['openai-images', 'OpenAI Images'], ['http-json', 'HTTP JSON']], act,
+    adapters: [['wavespeed', 'WaveSpeed'], ['openai-images', 'OpenAI Images'], ['openai-videos', 'OpenAI Videos'], ['openai-video-frames', 'OpenAI Video Frames'], ['http-json', 'HTTP JSON']], act,
     save: async entry => save({ ...config, providers: [...config.providers.filter(provider => provider.id !== entry.id), entry] }),
   });
 

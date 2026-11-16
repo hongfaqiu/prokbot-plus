@@ -2,11 +2,17 @@ import { createHmac, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { JsonStore } from './storage.mjs';
 import { check, equal, hash, secret, RateLimit } from './security.mjs';
+import {
+  claimWebhookEvent,
+  finishWebhookEvent,
+  markClaimedRunning,
+  pruneWebhookEvents,
+  readRawBody,
+  WEBHOOK_MAX_BODY,
+} from './webhook-queue.mjs';
 
-const MAX_BODY = 1024 * 1024, DAY = 86400000;
 const view = ({ key, ...hook }) => ({ ...hook, hasKey: Boolean(key), path: `/hooks/v1/${hook.id}` });
 const eventView = ({ body, ...event }) => event;
-const terminal = new Set(['completed', 'failed', 'interrupted', 'cancelled', 'skipped']);
 export const webhookSignature = (key, path, timestamp, eventId, raw) => createHmac('sha256', key)
   .update(['POST', path, String(timestamp), eventId, hash(raw)].join('\n')).digest('hex');
 
@@ -66,9 +72,7 @@ export class Webhooks {
     check(typeof timestamp === 'string' && /^\d{10}$/.test(timestamp) && Math.abs(this.now() - Number(timestamp) * 1000) <= 300000, 401, 'Expired webhook signature');
     check(typeof eventId === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(eventId), 400, 'Invalid event ID');
     check(typeof signature === 'string' && /^sha256=[a-f0-9]{64}$/.test(signature), 401, 'Invalid webhook signature');
-    let size = 0; const chunks = [];
-    for await (const chunk of request) { size += chunk.length; check(size <= MAX_BODY, 413, 'Event too large'); chunks.push(chunk); }
-    const raw = Buffer.concat(chunks);
+    const raw = await readRawBody(request, WEBHOOK_MAX_BODY);
     check(equal(signature.slice(7), webhookSignature(hook.key, path, timestamp, eventId, raw)), 401, 'Invalid webhook signature');
     let parsed; try { parsed = JSON.parse(raw.toString('utf8')); } catch { check(false, 400, 'Invalid JSON'); }
     check(parsed && typeof parsed === 'object' && !Array.isArray(parsed), 400, 'JSON object required');
@@ -80,45 +84,22 @@ export class Webhooks {
       const old = state.events.find(event => event.hookId === id && event.eventId === eventId);
       if (old) { check(old.digest === digest, 409, 'Event ID already used with another body'); return { ...eventView(old), duplicate: true }; }
       this.limiter.check(`hook:${id}`, current.ratePerMinute);
-      state.events = state.events.filter(event => !terminal.has(event.state) || event.finishedAt > this.now() - 30 * DAY);
-      check(state.events.length < 10000, 429, 'Webhook history limit reached');
-      const pending = state.events.filter(event => !terminal.has(event.state));
-      check(pending.length < 100 && pending.reduce((sum, event) => sum + Buffer.byteLength(event.body ?? ''), 0) + raw.length <= 32 * MAX_BODY, 429, 'Webhook queue full');
+      pruneWebhookEvents(state, { incomingBytes: raw.length, now: this.now() });
       const event = { id: randomUUID(), hookId: id, eventId, digest, body: raw.toString('utf8'),
         type: typeof parsed.type === 'string' ? parsed.type.slice(0, 100) : '', state: 'queued', receivedAt: this.now() };
       state.events.push(event); return eventView(event);
     });
   }
   async claim(worker) {
-    check(typeof worker === 'string' && /^[a-f0-9-]{36}$/.test(worker), 400, 'Invalid worker');
-    if (this.store.value.worker === worker && !this.store.value.events.some(event => ['queued', 'running'].includes(event.state))) return null;
-    return this.store.mutate(state => {
-      if (state.worker !== worker) {
-        for (const event of state.events) if (event.state === 'running') {
-          event.state = 'interrupted'; event.finishedAt = this.now(); event.detail = 'Host restarted'; delete event.body;
-        }
-        state.worker = worker;
-      }
-      // The Host owns one batch at a time; failed HTTP responses can safely fetch the same claim.
-      const held = state.events.find(event => event.state === 'running' && event.worker === worker);
-      if (held) { const hook = state.hooks.find(hook => hook.id === held.hookId); return { event: { ...held }, hook: hook ? view(hook) : null }; }
-      const event = state.events.find(event => event.state === 'queued');
-      if (!event) return null;
-      const hook = state.hooks.find(hook => hook.id === event.hookId);
+    return claimWebhookEvent(this.store, worker, this.now, (state, event, held) => {
+      const hook = state.hooks.find(item => item.id === event.hookId);
+      if (held) return { event: { ...event }, hook: hook ? view(hook) : null };
       if (!hook?.enabled) { event.state = 'cancelled'; event.finishedAt = this.now(); delete event.body; return null; }
-      Object.assign(event, { state: 'running', worker, runUuid: randomUUID(), startedAt: this.now(), revision: hook.revision });
+      markClaimedRunning(event, worker, this.now, { revision: hook.revision });
       return { event: { ...event }, hook: { ...view(hook) } };
     });
   }
-  async finish({ worker, id, runUuid, state: outcome, detail }) {
-    check(['completed', 'failed', 'skipped'].includes(outcome), 400, 'Invalid event outcome');
-    return this.store.mutate(state => {
-      const event = state.events.find(item => item.id === id);
-      check(event && event.worker === worker && event.runUuid === runUuid, 409, 'Event owner changed');
-      if (terminal.has(event.state)) return eventView(event);
-      check(event.state === 'running', 409, 'Event is not running');
-      Object.assign(event, { state: outcome, finishedAt: this.now(), detail: String(detail ?? '').slice(0, 300) });
-      delete event.body; return eventView(event);
-    });
+  async finish(payload) {
+    return finishWebhookEvent(this.store, payload, this.now, eventView);
   }
 }

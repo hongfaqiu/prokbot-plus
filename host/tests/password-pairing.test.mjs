@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { Auth, handleConnectPair } from '../server/auth.mjs';
-import { HttpError, RateLimit, sendJson } from '../server/security.mjs';
+import { HttpError, originFor, RateLimit, sendJson } from '../server/security.mjs';
+import { tailcatIngress } from '../server/tailcat-ingress.mjs';
 
 function memory(store) {
   store.value = structuredClone(store.initial);
@@ -72,6 +73,10 @@ test('Auth.pair supports Host admin password alongside pairing codes and enforce
   );
   await assert.rejects(
     auth.pair({ password: '', deviceName: 'My Mac', platform: 'desktop' }),
+    error => error.status === 400,
+  );
+  await assert.rejects(
+    auth.pair({ password: 12345678, deviceName: 'My Mac', platform: 'desktop' }),
     error => error.status === 400,
   );
   await assert.rejects(
@@ -162,4 +167,74 @@ test('POST /connect/pair enforces strict brute-force rate limiting on password a
   }
   const blocked = await postPair({ password: 'Pass123456', deviceName: 'Attacker', platform: 'desktop' });
   assert.equal(blocked.status, 429);
+});
+
+test('POST /connect/pair handles password pairing identically over direct HTTPS/canonical origin and Tailcat ingress', async t => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), 'grokbot-host-pwd-'));
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const auth = await new Auth(dataDir).load();
+  await auth.setup(auth.setupKey, 'qqhsfa.com');
+  const limiter = new RateLimit();
+  const federation = { role: () => 'primary' };
+  const canonical = 'https://host.example';
+  let ingress;
+  const server = http.createServer(async (request, response) => {
+    try {
+      const reqPath = request.url.split('?')[0];
+      const origin = originFor(request, ingress?.matches(request) ? '' : canonical);
+      delete request.headers['x-grokbot-tailcat-ingress'];
+      if (request.method === 'POST' && reqPath === '/connect/pair') {
+        return await handleConnectPair({ request, response, origin, auth, federation, limiter });
+      }
+      if (request.method === 'GET' && reqPath === '/connect/status') {
+        const header = request.headers.authorization ?? '';
+        const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+        const found = auth.authenticate(token);
+        if (!found) return sendJson(response, 401, { error: 'unauthorized' });
+        return sendJson(response, 200, {
+          deviceId: found.id,
+          deviceName: found.name,
+          platform: found.platform,
+          connected: true,
+        });
+      }
+      sendJson(response, 404, { error: 'not found' });
+    } catch (error) {
+      if (error instanceof HttpError) return sendJson(response, error.status, { error: error.message });
+      sendJson(response, 500, { error: error.message });
+    }
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const directBase = `http://127.0.0.1:${server.address().port}`;
+  ingress = await tailcatIngress(`127.0.0.1:${server.address().port}`);
+  t.after(() => ingress.close());
+  const ingressBase = `http://${ingress.target}`;
+
+  const directRes = await fetch(`${directBase}/connect/pair`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: 'qqhsfa.com', deviceName: 'Direct Mac', platform: 'desktop' }),
+  });
+  assert.equal(directRes.status, 201);
+  const directJson = await directRes.json();
+  assert.equal(directJson.gatewayUrl, canonical);
+
+  const ingressRes = await fetch(`${ingressBase}/connect/pair`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: 'qqhsfa.com', deviceName: 'Tailcat Phone', platform: 'desktop', clientKind: 'android' }),
+  });
+  assert.equal(ingressRes.status, 201);
+  const ingressJson = await ingressRes.json();
+  assert.equal(ingressJson.gatewayUrl, ingressBase);
+  assert.equal(ingressJson.notificationUrl, `${ingressBase}/notifications/events`);
+
+  const statusRes = await fetch(`${ingressBase}/connect/status`, {
+    headers: { Authorization: `Bearer ${ingressJson.token}` },
+  });
+  assert.equal(statusRes.status, 200);
+  const statusJson = await statusRes.json();
+  assert.equal(statusJson.platform, 'android');
+  assert.equal(statusJson.connected, true);
 });

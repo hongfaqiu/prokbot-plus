@@ -119,3 +119,80 @@ test('the startup explanation names the WebView version and what to update', () 
   assert.deepEqual([...older.explanation()], ['The interface failed while starting, so the page stayed blank.',
     'This device\'s WebView is Chromium 95; updating to 111 or later is recommended.']);
 });
+
+test('compat overlay triggers even when root becomes blank after initial mount', () => {
+  const listeners = new Map();
+  let overlayShown = null;
+  let rootNode;
+  const fakeElement = (id = '') => ({
+    id,
+    tagName: 'DIV',
+    style: { cssText: '' },
+    children: [],
+    childElementCount: 0,
+    firstChild: null,
+    firstElementChild: null,
+    parentNode: null,
+    textContent: '',
+    attrs: {},
+    setAttribute(k, v) { this.attrs[k] = v; },
+    appendChild(child) {
+      child.parentNode = this;
+      this.children.push(child);
+      this.firstChild = this.children[0] ?? null;
+      this.firstElementChild = this.children[0] ?? null;
+      this.childElementCount = this.children.length;
+      if (child.id === 'grokbot-compat-message') overlayShown = child;
+      return child;
+    },
+    removeChild(child) {
+      const idx = this.children.indexOf(child);
+      if (idx >= 0) this.children.splice(idx, 1);
+      child.parentNode = null;
+      this.firstChild = this.children[0] ?? null;
+      this.firstElementChild = this.children[0] ?? null;
+      this.childElementCount = this.children.length;
+      if (child === overlayShown) overlayShown = null;
+    },
+    addEventListener() {},
+  });
+  rootNode = fakeElement('root');
+  const inner = fakeElement();
+  inner.appendChild(fakeElement());
+  rootNode.appendChild(inner);
+  const body = fakeElement('body');
+  const timers = [];
+  const context = vm.createContext({
+    navigator: { userAgent: 'Chrome/134.0.0.0', language: 'zh-CN' },
+    __grokbotAndroidBoot: { locale: 'zh-CN' },
+    setTimeout(fn, delay) { const h = { fn, delay, cleared: false }; timers.push(h); return h; },
+    clearTimeout(h) { if (h) h.cleared = true; },
+    addEventListener(type, fn) { listeners.set(type, fn); },
+    removeEventListener() {},
+    document: {
+      readyState: 'complete',
+      body,
+      getElementById: id => id === 'root' ? rootNode : null,
+      createElement: () => fakeElement(),
+    },
+  });
+  context.window = context;
+  vm.runInContext(source, context, { filename: 'compat.js' });
+
+  // Initial check sees mounted #root (non-empty) and clears any overlay.
+  const initialTimer = timers.find(t => !t.cleared);
+  assert.ok(initialTimer && initialTimer.delay <= 10000);
+  initialTimer.fn();
+  assert.equal(overlayShown, null);
+
+  // Later #root becomes empty with a silent crash (no recent error within 10s).
+  rootNode.children.length = 0;
+  rootNode.firstChild = null;
+  rootNode.firstElementChild = null;
+  listeners.get('securitypolicyviolation')?.({ violatedDirective: 'script-src', blockedURI: 'inline' });
+  const pending = timers.filter(t => !t.cleared).pop();
+  assert.ok(pending);
+  pending.fn();
+  assert.ok(overlayShown);
+  assert.match(context.__grokbotCompat.errors[0], /CSP blocked script-src inline/);
+});

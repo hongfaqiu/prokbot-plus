@@ -1,4 +1,6 @@
 package android.content;
 
-// Pairing.verify only needs a Context to select localized error strings in this JVM test.
-public final class Context {}
+// Pairing.verify / Pairing.pair need a Context to select localized error strings and read deviceName in JVM tests.
+public final class Context {
+    public ContentResolver getContentResolver() { return null; }
+}

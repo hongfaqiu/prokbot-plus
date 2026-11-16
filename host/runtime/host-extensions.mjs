@@ -106,6 +106,7 @@ export function createExtensionStarter(library, modelConfig) {
       const automations = await decorateLocalHostAutomations(context, library, api);
       const webhooks = await startLocalWebhooks(context);
       return { ...automations,
+        ...(webhooks.getWebhookCredential ? { getWebhookCredential: webhooks.getWebhookCredential } : {}),
         async suspendWakes() { webhooks.suspend(); apis.get('remote-agent-messaging')?.suspend?.(); return automations.suspendWakes(); },
         resumeWakes() { const result = automations.resumeWakes(); webhooks.resume(); apis.get('remote-agent-messaging')?.resume?.(); return result; },
       };

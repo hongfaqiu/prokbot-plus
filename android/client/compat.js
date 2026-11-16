@@ -340,11 +340,20 @@
     remember(reason && reason.message ? (reason.name ? reason.name + ': ' : '') + reason.message : reason);
     schedule(1500);
   });
+  global.addEventListener('securitypolicyviolation', function (event) {
+    remember('CSP blocked ' + (event.violatedDirective || '') + ' ' + (event.blockedURI || ''));
+    schedule(1500);
+  });
 
   var overlay = null, timer = null, mounted = false;
   // The interface renders into #root; the pairing page sets __grokbotStarted after its first render.
   function root() { return document.getElementById('root'); }
-  function rootEmpty() { var element = root(); return element ? !element.firstChild : global.__grokbotStarted !== true; }
+  function rootEmpty() {
+    var element = root();
+    if (!element) return global.__grokbotStarted !== true;
+    if (!element.firstChild) return true;
+    return element.children.length === 1 && element.firstElementChild.children.length === 0 && !String(element.textContent || '').trim();
+  }
 
   function schedule(delay) {
     if (timer) clearTimeout(timer);
@@ -358,8 +367,6 @@
       if (overlay) { overlay.parentNode && overlay.parentNode.removeChild(overlay); overlay = null; }
       return;
     }
-    // A blank root after it had content is a crash only when something just failed.
-    if (mounted && Date.now() - lastErrorAt > 10000) return;
     show();
   }
 
@@ -418,7 +425,7 @@
       new MutationObserver(function () { schedule(element.firstChild ? 0 : 1500); }).observe(element, { childList: true });
     }
     // Below the minimum the module never runs; otherwise allow a slow phone time to parse.
-    schedule(chromium && chromium < MINIMUM_CHROMIUM ? 1500 : 20000);
+    schedule(chromium && chromium < MINIMUM_CHROMIUM ? 1500 : 8000);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watch); else watch();
 })();

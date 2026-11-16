@@ -120,9 +120,22 @@ test('password pairing sends exact Host admin password, validates input, and swi
   const { fields, requests: formRequests, submit } = await formFixture(t, { paired: true, connected: false, server, tailcat: false });
   assert.equal(fields.get('#key-group').hidden, false);
   assert.equal(fields.get('#password-group').hidden, true);
+  assert.equal(fields.get('#key').disabled, false);
+  assert.equal(fields.get('#password').disabled, true);
+  assert.equal(fields.get('#server').type, 'url');
+  fields.get('#tailcat').checked = true;
+  fields.get('#tailcat').onchange();
+  assert.equal(fields.get('#server').type, 'text');
+  fields.get('#tailcat').checked = false;
+  fields.get('#tailcat').onchange();
+  assert.equal(fields.get('#server').type, 'url');
+
+  fields.get('#key').value = 'AB1';
   fields.get('#mode-password').dispatchEvent(new Event('click'));
   assert.equal(fields.get('#key-group').hidden, true);
   assert.equal(fields.get('#password-group').hidden, false);
+  assert.equal(fields.get('#key').disabled, true, 'hidden partial pairing code must be disabled so HTML5 pattern validation does not block password submit');
+  assert.equal(fields.get('#password').disabled, false);
   assert.equal(fields.get('#key').required, false);
   assert.equal(fields.get('#password').required, true);
   fields.get('#password').value = secret;
@@ -132,6 +145,8 @@ test('password pairing sends exact Host admin password, validates input, and swi
   fields.get('#mode-code').dispatchEvent(new Event('click'));
   assert.equal(fields.get('#key-group').hidden, false);
   assert.equal(fields.get('#password-group').hidden, true);
+  assert.equal(fields.get('#key').disabled, false);
+  assert.equal(fields.get('#password').disabled, true);
   assert.equal(fields.get('#key').required, false, 'switching back to code mode restores canRetry reconnect behavior');
 });
 

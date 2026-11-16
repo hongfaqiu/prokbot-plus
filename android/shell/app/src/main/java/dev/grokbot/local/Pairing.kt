@@ -51,7 +51,12 @@ object Pairing {
             null
         }
         val server = pending?.localUrl ?: normalizeServer(context, address)
+        val trimmedKey = halfWidth(pairingKey)
         val byPassword = password.isNotEmpty()
+        if (byPassword && trimmedKey.isNotEmpty()) {
+            network?.dropPending(pending)
+            throw PairingException(Text.t(context, "请只使用配对码或管理员密码之一。", "Provide either a pairing code or an admin password."))
+        }
         val body = JSONObject().put("deviceName", deviceName(context)).put("platform", "desktop").put("clientKind", "android")
         if (byPassword) {
             if (password.length > 128) {
@@ -60,7 +65,7 @@ object Pairing {
             }
             body.put("password", password)
         } else {
-            val key = halfWidth(pairingKey).uppercase()
+            val key = trimmedKey.uppercase()
             if (key.isEmpty()) {
                 network?.dropPending(pending)
                 throw PairingException(Text.t(context, "请输入配对码。", "Enter a pairing code."))
