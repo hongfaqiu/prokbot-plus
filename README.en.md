@@ -39,6 +39,8 @@ The open-source project [ProkBot](https://gitee.com/ahaduoduoduo/ProkBot) moves 
 - Fixes problems found in real use with web search, image generation, message order and local commands;
 - Provides one tool for deployment, backup and upgrades, plus a deployment guide an AI can follow.
 
+> This repository is forked from upstream [ferretgeek/prokbot-plus](https://github.com/ferretgeek/prokbot-plus) (based on commit `d3b6f29`; which builds on [ProkBot](https://gitee.com/ahaduoduoduo/ProkBot)), adding custom enhancements and fixes (such as Host admin-password auto-pairing, a custom-path Windows install wizard, configurable single-desktop / memory limits, and model catalog limit alignment).
+>
 > This is an unofficial project with no connection to xAI or the official Grok Bot. Noncommercial use only. See [License and notices](#license-and-notices).
 
 ## What it does
@@ -251,7 +253,7 @@ See the [CHANGELOG](CHANGELOG.md) and the [technical documentation](docs/ARCHITE
 
 ## License and notices
 
-- This project is derived from [ProkBot](https://gitee.com/ahaduoduoduo/ProkBot) (its 2026-11-05 version, commit `3e9fe8c`) and keeps its [ProkBot Noncommercial License 1.0](LICENSE):
+- This repository is derived directly from upstream [ferretgeek/prokbot-plus](https://github.com/ferretgeek/prokbot-plus); upstream itself is derived from [ProkBot](https://gitee.com/ahaduoduoduo/ProkBot) (its 2026-11-05 version, commit `3e9fe8c`) and keeps its [ProkBot Noncommercial License 1.0](LICENSE):
   - You may use, study, modify and distribute it for personal and noncommercial purposes;
   - You may not use it for any commercial purpose, including paid deployments, paid services and internal use in a company;
   - See [NOTICE](NOTICE) for the source and the list of changes.

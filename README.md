@@ -39,6 +39,8 @@ Grok Bot 是 xAI 的 AI 助手应用，有 Windows、Mac、iPhone 等客户端�
 - 修好了联网搜索、生图、消息顺序、本机命令等实际使用中的问题；
 - 提供一键部署、备份、升级工具和一份 AI 能照着做的部署手册。
 
+> 本仓库派生自上游开源项目 [ferretgeek/prokbot-plus](https://github.com/ferretgeek/prokbot-plus)（基于提交 `d3b6f29`；原作者仓库源自 [ProkBot](https://gitee.com/ahaduoduoduo/ProkBot)），并在此基础上补充了部分二次开发与缺陷修复（如管理密码配对、自定义安装路径向导、容器桌面数量与内存限制可配置、上游模型列表容量校验对齐等）。
+>
 > 这是非官方项目，与 xAI 和 Grok Bot 官方没有任何关系，仅限非商业使用，见[许可与声明](#许可与声明)。
 
 ## 能做什么
@@ -251,7 +253,7 @@ APK 用只属于你的密钥签名，以后升级要用同一个密钥。Android
 
 ## 许可与声明
 
-- 本项目源自 [ProkBot](https://gitee.com/ahaduoduoduo/ProkBot)（基于其 2026-11-05 版本，提交 `3e9fe8c`），沿用它的 [ProkBot 非商业许可证 1.0](LICENSE)：
+- 本仓库直接基于上游项目 [ferretgeek/prokbot-plus](https://github.com/ferretgeek/prokbot-plus) 进行二次修改；上游项目本身源自 [ProkBot](https://gitee.com/ahaduoduoduo/ProkBot)（基于其 2026-11-05 版本，提交 `3e9fe8c`），沿用它的 [ProkBot 非商业许可证 1.0](LICENSE)：
   - 可以个人使用、学习、修改和非商业分发；
   - 不能用于任何商业用途，包括收费部署、付费服务和企业内部使用；
   - 来源和修改清单见 [NOTICE](NOTICE)。
