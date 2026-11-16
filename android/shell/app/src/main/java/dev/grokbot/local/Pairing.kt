@@ -42,6 +42,7 @@ object Pairing {
         pairingKey: String,
         tailcat: Boolean = false,
         network: TailcatNetwork? = null,
+        password: String = "",
     ): Connection {
         val pending = if (tailcat) {
             val tunnel = network ?: throw PairingException(Text.t(context, "Tailcat 服务不可用。", "Tailcat is unavailable."))
@@ -50,12 +51,22 @@ object Pairing {
             null
         }
         val server = pending?.localUrl ?: normalizeServer(context, address)
-        val key = halfWidth(pairingKey).uppercase()
-        if (key.isEmpty()) {
-            network?.dropPending(pending)
-            throw PairingException(Text.t(context, "请输入配对码。", "Enter a pairing code."))
+        val byPassword = password.isNotEmpty()
+        val body = JSONObject().put("deviceName", deviceName(context)).put("platform", "desktop").put("clientKind", "android")
+        if (byPassword) {
+            if (password.length > 128) {
+                network?.dropPending(pending)
+                throw PairingException(Text.t(context, "管理员密码过长。", "Admin password is too long."))
+            }
+            body.put("password", password)
+        } else {
+            val key = halfWidth(pairingKey).uppercase()
+            if (key.isEmpty()) {
+                network?.dropPending(pending)
+                throw PairingException(Text.t(context, "请输入配对码。", "Enter a pairing code."))
+            }
+            body.put("pairingKey", key)
         }
-        val body = JSONObject().put("pairingKey", key).put("deviceName", deviceName(context)).put("platform", "desktop").put("clientKind", "android")
         val (status, reply) = try {
             request("$server/connect/pair", "POST", body.toString(), null, readTimeoutMs = if (tailcat) 45_000 else 35_000)
         } catch (error: Exception) {
@@ -66,8 +77,14 @@ object Pairing {
         if (status !in 200..299) {
             network?.dropPending(pending)
             throw PairingException(
-                if (status == 401) Text.t(context, "配对码无效或已过期。", "Pairing code is invalid or expired.")
-                else Text.t(context, "连接失败（HTTP $status）。", "Connection failed (HTTP $status)."),
+                when (status) {
+                    401 -> if (byPassword) Text.t(context, "管理员密码不正确。", "Admin password is incorrect.")
+                    else Text.t(context, "配对码无效或已过期。", "Pairing code is invalid or expired.")
+                    429 -> Text.t(context, "尝试次数过多，请稍后重试。", "Too many attempts. Try again later.")
+                    409 -> reply?.optString("error")?.takeIf { it.isNotBlank() }
+                        ?: Text.t(context, "Host 尚未初始化或设备数量已达上限。", "Host is not initialized or device limit reached.")
+                    else -> Text.t(context, "连接失败（HTTP $status）。", "Connection failed (HTTP $status).")
+                },
             )
         }
         val token = reply?.optString("token").orEmpty()

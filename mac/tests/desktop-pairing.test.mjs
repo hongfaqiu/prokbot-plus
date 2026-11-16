@@ -45,7 +45,10 @@ async function formFixture(t, state, disconnect = async () => {}) {
     return fields.get(id);
   } };
   const window = { connection: { locale: 'en', status: async () => state, disconnect,
-    pair: async (address, code, tailcat, edit) => { requests.push({ address, code, tailcat, edit }); return { ok: true }; } } };
+    pair: async (address, code, tailcat, edit, mode) => {
+      requests.push(mode === undefined ? { address, code, tailcat, edit } : { address, code, tailcat, edit, mode });
+      return { ok: true };
+    } } };
   Object.assign(globalThis, { document, window });
   t.after(() => { delete globalThis.window; delete globalThis.document; });
   await import(`../clients/desktop/connect.js?fixture=${encodeURIComponent(t.name)}`);
@@ -96,6 +99,40 @@ test('the pairing window can retry a saved transport without a new code or expli
   fields.get('#disconnect').dispatchEvent(new Event('click')); await new Promise(resolve => setImmediate(resolve));
   assert.equal(fields.get('#disconnect').hidden, true);
   assert.equal(fields.get('#key').required, true);
+});
+
+test('password pairing sends exact Host admin password, validates input, and switches modes cleanly in connect.js', async t => {
+  const requests = [];
+  const fetcher = async (url, options) => { requests.push({ url, body: JSON.parse(options.body) }); return reply(); };
+  await assert.rejects(connection.pair(server, '', fetcher, { mode: 'password' }), /admin password/i);
+  await assert.rejects(connection.pair(server, 'x'.repeat(129), fetcher, { mode: 'password' }), /too long/i);
+  assert.equal(requests.length, 0);
+
+  const secret = 'Host Pass 123!';
+  assert.deepEqual(await connection.pair(server, secret, fetcher, { mode: 'password' }), record);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].body.password, secret);
+  assert.equal('pairingKey' in requests[0].body, false);
+  await assert.rejects(connection.pair(server, secret, async () => new Response('bad', { status: 401 }), { mode: 'password' }), /incorrect/i);
+  await assert.rejects(connection.pair(server, secret, async () => new Response('slow down', { status: 429 }), { mode: 'password' }), /too many/i);
+  await assert.rejects(connection.pair(server, secret, async () => Response.json({ error: 'Not initialized' }, { status: 409 }), { mode: 'password' }), /Not initialized/);
+
+  const { fields, requests: formRequests, submit } = await formFixture(t, { paired: true, connected: false, server, tailcat: false });
+  assert.equal(fields.get('#key-group').hidden, false);
+  assert.equal(fields.get('#password-group').hidden, true);
+  fields.get('#mode-password').dispatchEvent(new Event('click'));
+  assert.equal(fields.get('#key-group').hidden, true);
+  assert.equal(fields.get('#password-group').hidden, false);
+  assert.equal(fields.get('#key').required, false);
+  assert.equal(fields.get('#password').required, true);
+  fields.get('#password').value = secret;
+  await submit();
+  assert.deepEqual(formRequests, [{ address: server, code: secret, tailcat: false, edit: false, mode: 'password' }]);
+  assert.equal(fields.get('#password').value, '');
+  fields.get('#mode-code').dispatchEvent(new Event('click'));
+  assert.equal(fields.get('#key-group').hidden, false);
+  assert.equal(fields.get('#password-group').hidden, true);
+  assert.equal(fields.get('#key').required, false, 'switching back to code mode restores canRetry reconnect behavior');
 });
 
 test('a saved device may retry its original origin or tunnel, never a different Host or transport', () => {

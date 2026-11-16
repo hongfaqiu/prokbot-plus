@@ -1,4 +1,4 @@
-"""Optional native Windows UX fixture. Supply a project-built, pinned 0.71.2 portable folder."""
+"""Optional native Windows UX fixture. Supply a portable folder built by this project from the pinned input."""
 import argparse
 from collections import Counter
 from contextlib import contextmanager
@@ -34,7 +34,7 @@ def digest(path):
 def verify(app):
     pins = json.loads((REPO / 'windows/patchers/desktop/supported.json').read_text('utf-8'))
     marker = json.loads((app / 'resources/grokbot-local.patch.json').read_text('utf-8'))
-    assert marker['version'] == pins['version'] == '0.71.2' and marker['originalAsarSha256'] == pins['asarSha256']
+    assert marker['version'] == pins['version'] and marker['originalAsarSha256'] == pins['asarSha256']
     assert marker['executable']['originalSha256'] == pins['exeSha256'] and digest(app / 'Grok Bot.exe') == marker['executable']['patchedSha256']
     assert digest(app / 'resources/app.asar') == marker['patchedAsarSha256']
     # Do not run an older patched package that registers protocols/shortcuts even in test profiles.

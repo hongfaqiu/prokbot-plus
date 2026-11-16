@@ -61,9 +61,10 @@ function observeIO(t, beforeStream = () => {}) {
   return { streams, open, pathStreams, reads };
 }
 
-test('the packaged diagnostic names only the recorded whole Windows 1.1.0 installer', () => {
-  assert.equal(known.version, '1.1.0'); assert.equal(known.archiveBytes, 127403656);
-  assert.equal(known.observedArchiveSha256, '01ccb10f2144ea0eb787042c54fc4b8ca2c6f43eccb7dabe5fe5eb86fa5ed044');
+test('the packaged diagnostic names only the recorded whole Windows 0.71.2 installer', () => {
+  assert.equal(known.version, '0.71.2'); assert.equal(known.archiveBytes, 118384600);
+  assert.equal(known.observedArchiveSha256, 'be14f2f2067d86334360f5d4f7c94515886ef795df25645aa883d3983c4ab4aa');
+  assert.deepEqual(known.testedAgainst, { version: supported.version, sha256: supported.archive.sha256 });
   assert.notEqual(supported.archive.sha256, known.observedArchiveSha256);
 });
 
@@ -79,7 +80,7 @@ test('only a rejected installer of the known size gets one read-only bounded str
   assert.equal(pathStreams.mock.callCount(), 0);
 
   await fs.writeFile(source, sample);
-  await assert.rejects(verify(), /official Grok Bot 1\.1\.0 installer is incompatible/);
+  await assert.rejects(verify(), /official Grok Bot 0\.71\.2 installer is incompatible/);
   append = true; // The prefix is still a match, but it is no longer the whole file.
   await assert.rejects(verify(), /origin of this file are unverified/);
   assert.equal(open.mock.callCount(), 2);
@@ -121,17 +122,17 @@ test('standalone Windows CLI rejects a renamed exact installer and an altered na
     await fs.writeFile(path.join(output, keep), 'previous build');
     const corrupt = Buffer.from(sample);
     corrupt[corrupt.length - 1] ^= 1;
-    for (const [name, bytes, exact] of [['renamed.EXE', sample, true], ['Grok_Bot_1.1.0_Setup.exe', corrupt, false]]) {
+    for (const [name, bytes, exact] of [['renamed.EXE', sample, true], ['Grok_Bot_0.71.2_Setup.exe', corrupt, false]]) {
       const source = path.join(root, name);
       await fs.writeFile(source, bytes);
       await assert.rejects(promisify(execFile)(process.execPath, [path.join(desktop, 'patch.mjs'), '--source', name, '--output', output],
         { cwd: root, windowsHide: true, timeout: 10000 }), error => {
         assert.equal(error.code, 1);
         assert.equal(error.stdout, '');
-        if (exact) assert.match(error.stderr, /official Grok Bot 1\.1\.0 installer is incompatible with this ProkBot Plus patch/);
+        if (exact) assert.match(error.stderr, /official Grok Bot 0\.71\.2 installer is incompatible with this ProkBot Plus patch/);
         else {
           assert.match(error.stderr, /origin of this file are unverified/);
-          assert.doesNotMatch(error.stderr, /official|官方|1\.1\.0/i);
+          assert.doesNotMatch(error.stderr, /official|官方|0\.71\.2/i);
         }
         assert.match(error.stderr, /Pairing did not run/);
         assert.ok(error.stderr.includes(`Omit --source to fetch the exact supported Grok Bot ${supported.version} Windows ${supported.architecture}`));

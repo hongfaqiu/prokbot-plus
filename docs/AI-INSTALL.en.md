@@ -1,26 +1,33 @@
 # Deploy ProkBot Plus
 
-[简体中文](AI-INSTALL.md) · [Architecture and extensions](ARCHITECTURE.en.md) · [Restore, offline inputs and execution nodes](https://github.com/ferretgeek/prokbot-plus/blob/v1.1.0/host/README.en.md)
+[简体中文](AI-INSTALL.md) · [Architecture and extensions](ARCHITECTURE.en.md) · [Split deployment](#split-host) · [Volume recovery](#volume-recovery)
 
 **One route for a person or their AI: choose a machine, check it, start the server, connect a model, then send a message.** A healthy container is not proof of a working conversation. Run server commands from the repository root or the equivalent directory in the Host release package.
 
-**Already have a Host and updating only a client?** Skip all server commands below. Use the client ZIP; keep the existing `.env`, project name and volumes. Do not run `init`, `up` or `update` for a client-only change.
-
 ## Choose a deployment
+
+**Already have a Host and updating only a client?** Skip all server commands below. Use the client ZIP, keep `.env`, the project name and volumes, and do not run `init`, `up` or `update` for a client-only change.
 
 | Machines available | Deployment | What to expect |
 | --- | --- | --- |
-| One x86_64 Linux server | Default: native Host and execution desktop | Existing end-to-end conversation coverage |
+| One x86_64 Linux server | Default: native Host and execution desktop | Minimum 2 cores / 4 GB, recommended 4 cores / 8 GB; 2 cores / 2 GB failed in testing. See [server requirements](../README.en.md#server-requirements) |
 | One ARM64 Linux server, such as Oracle Ampere A1 | Default: native Host and amd64 desktop under QEMU | **Experimental**. The desktop is not native ARM. Run `doctor` first; performance depends on the workload |
-| ARM64 Linux plus an amd64 Linux machine | Put `--host-only` before `doctor` and `init` on the Host; put the desktop on the second machine | Recommended for ARM. Chat and desktop control were verified on a native A1 Host without downloading or emulating the desktop on ARM. See [execution node setup](https://github.com/ferretgeek/prokbot-plus/blob/v1.1.0/host/README.en.md#separate-execution-computer) |
+| ARM64 Linux plus an amd64 Linux machine | Put `--host-only` before `doctor` and `init` on the Host; put the desktop on the second machine | ARM does not download or emulate the desktop. Historical native A1 tests covered chat and remote desktop control, not an A1 Docker build, Compose upgrade or capacity test in this round |
 
-Ask once: is this an installation or an upgrade? Which server and SSH access? How will clients reach it (local, private network, HTTPS domain)? Which model API, model ID and clients? Let the owner enter passwords and API keys in the console, not in chat, issues or logs. Do not change existing services, DNS, proxies or firewalls by default.
+<a id="split-host"></a>
+**Split deployment:** `--host-only` omits the local desktop; it is not a desktop-free chat mode. Deploy the execution node on a separate amd64 Linux machine, then enter its address and key in the Host console and enable it. Until both a model and the node are configured, the console and setup health check can work while the chat core is not running. An unreachable node is not a successful deployment. The matching Host package's `host/README.en.md` has the offline-input and node setup steps.
 
-Requirements: Python 3.10+, access to a Linux Docker daemon, Docker Compose v2 with `up --wait`, and Git or an extracted Host package. Earlier planning allowed 8 GB RAM and 30 GB free disk for a local desktop, not a measured minimum or recommendation; the first build downloads about 8 GB. Leave extra headroom for emulation. A local ARM desktop also needs a registered x86-64 QEMU/binfmt interpreter; ask the owner before changing system configuration.
+If you saved the model first, the old console waited indefinitely for the Host and the CLI timed out after three minutes. Overview now shows **Execution node required**; **Set up node** opens the actual **Execution** settings form. In this state the CLI reports that the model was **saved, not applied**. Do not re-enter the model. Enable the node, confirm the Host is connected, then test chat.
+
+Ask once: is this an installation or an upgrade? Which server and SSH access? How will clients reach it (local, private network, HTTPS domain)? Which model API, model ID and clients? Let the owner enter passwords and API keys in the console, not in chat, issues or logs. Do not change existing services, DNS, proxies or firewalls by default. Use only dedicated, authorized non-production instances for this candidate's upgrade, recovery and load tests. Do not use production services, volumes or credentials.
+
+Requirements: Python 3.10+, access to a Linux Docker daemon, Compose supporting both `--wait` and `--wait-timeout` on `up`, and Git or an extracted Host package. With the desktop on the same machine, the minimum is 2 cores, 4 GB RAM and 30 GB free disk; 4 cores, 8 GB and 50 GB are recommended. Build caches and backups also consume disk; see [server requirements](../README.en.md#server-requirements) for the basis. A local ARM desktop also needs a registered x86-64 QEMU/binfmt interpreter; ask the owner before changing system configuration.
 
 On fresh Ubuntu 24.04 install `docker.io docker-compose-v2 docker-buildx python3 git` from the distribution, enable Docker, grant the deployment user access and log in again. For a local ARM desktop only, install `qemu-user-static binfmt-support`, enable the interpreter with `sudo update-binfmts --enable qemu-x86_64`, then run `doctor`. Only fill gaps on existing installations; membership in the `docker` group grants administrative control of the host.
 
 ## Check and start
+
+**Both examples below are for a fresh installation with the Host and desktop on the same machine.** For a separate desktop, use `python3 host/deploy.py --host-only doctor` for the first check and `python3 host/deploy.py --host-only init` for initialization. Keep the original project name when upgrading and read [volume backup and recovery](#volume-recovery) first. For [split deployment](#split-host), the desktop node commands are under “Separate execution computer” in `host/README.en.md` in the matching Host package.
 
 For SSH use Bash (Git Bash on Windows). Each SSH block starts a fresh session. Use `set -eu`, change to the same source directory and redirect commands that might read the script from stdin with `< /dev/null`. For example, on a new installation:
 
@@ -36,7 +43,7 @@ EOF
 
 Do not clone over existing code. Without GitHub access on the server, run `git archive --format=tar.gz -o prokbot-host-src.tar.gz HEAD host` on the client, transfer only that archive, and extract it into a fresh source directory. Never upload your working tree or private files. Builds still require access to the pinned upstream inputs and dependencies.
 
-A successful `doctor` prints JSON with `ok: true`, the Host platform, desktop mode, resources and volumes. `hostDataVolumes` includes Host volumes under other project names. If you find an existing instance, confirm its `.env`, project name and topology, only **update** it when a server upgrade is intended. Do not change project names to reinstall. A failed probe stops before the large desktop download. For a new instance:
+A successful `doctor` prints JSON with `ok: true`, the Host platform, desktop mode, resources and volumes. `hostDataVolumes` includes Host volumes under other project names. If you find an existing instance, confirm its `.env`, project name and topology, then **update** it. Do not change project names to reinstall. A failed probe stops before the large desktop download. For a new instance:
 
 ```sh
 cd "$HOME/grokbot/src"
@@ -52,21 +59,23 @@ python3 host/deploy.py status < /dev/null
 - Separate desktop: run `python3 host/deploy.py --host-only init`; subsequent operations remember this mode. Use `--home` and `--project` for a custom instance; global options precede the command. Old `.env` files have no mode marker: for a split deployment always pass `--host-only` and the original project name.
 
 <a id="91-windows-1011-x64"></a><a id="92-mac-apple-silicon"></a><a id="94-android-phone"></a>
-<a id="client-packages"></a>
 ## Connect and verify
-
-A client-only update does not require a server redeploy. Check the [accepted original and shell versions](../README.en.md#client-versions) and reuse the Android signing key for an in-place update. Follow the guide inside your chosen release archive; do not substitute the default branch for a tagged release.
 
 1. Run `python3 host/deploy.py setup-key` in a private terminal; do not forward the output to chat. Use it in the console to set a 12–128 character admin password. This first-use code is not a device pairing code.
 2. For a split deployment, connect the execution node in the console first. In Models, enter the endpoint, model ID and API key. OpenAI Chat and Responses normally use a `/v1` base; Anthropic Messages accepts the root. Match the provider's actual API. Test before saving and wait for the Host to connect. Search, image generation, voice and push are optional.
 3. Generate a six-character, single-use pairing code in the console (valid for five minutes). Enter the same address as `GROKBOT_PUBLIC_URL` and the code in the client. Pair each device separately. Android needs a private network address or HTTPS; it does not support Tailcat links.
 
-| Client | Build and install |
+<a id="client-packages"></a>
+**Choose a client package:** every ZIP includes this guide, but only the tools that platform needs. The paths below start at the root of the indicated ZIP. Use the matching patch release; other packages are not expected to contain these files.
+
+| Client | Pinned input and guide inside its package |
 | --- | --- |
-| Windows 10/11 x64 | [Windows instructions](https://github.com/ferretgeek/prokbot-plus/blob/v1.1.0/windows/README.en.md) |
-| Mac (Apple Silicon) | [Mac instructions](https://github.com/ferretgeek/prokbot-plus/blob/v1.1.0/mac/README.en.md) |
-| iPhone | [iOS patching and signing](https://github.com/ferretgeek/prokbot-plus/blob/v1.1.0/ios/README.en.md) |
-| Android 9+ | [Independently developed, unofficial Android client](https://github.com/ferretgeek/prokbot-plus/blob/v1.1.0/android/README.en.md) |
+| Windows 10/11 x64 | Windows ZIP: `windows/README.en.md`. Build a portable client or installer from the official 1.1.0 x64 installer. Keep the shared `mac/` directory in the same package. |
+| Mac (Apple Silicon) | Mac ZIP: `mac/README.en.md`. Use the official Apple Silicon 0.71.2 original. Local graphical control also requires suitable signing and OS permissions. |
+| iPhone | iOS ZIP: the Signing section of `ios/README.en.md`. Supply a decrypted 1.16.0 (23152) IPA and follow `extension-signing.json` to configure signing for the main app and each of its three extensions. |
+| Android 9+ | Android ZIP: `android/README.en.md`. Build an APK from the official Windows 0.71.2 installer (not the 1.1.0 installer the Windows client uses) and the project shell, not the official Android APK. Back up your signing key separately; upgrades need the same key. |
+
+See the [client version table](../README.en.md#client-versions) before obtaining originals. The store and stable feeds can move ahead of the patches; the tools require the inputs in the right column. The Android shell has its own app version, separate from the renderer and minimum OS version.
 
 For scripted administration, run `python3 host/deploy.py admin help`. Pass `GROKBOT_ADMIN_PASSWORD` and `MODEL_API_KEY` through the environment, not arguments; never print the environment. `admin session` checks initialization, `admin status` checks the core, and `admin model-set --test-only` tests the specified API, endpoint and model without saving.
 
@@ -82,9 +91,18 @@ Run these in the original source directory:
 | Status / recent logs | `python3 host/deploy.py status` / `python3 host/deploy.py logs` |
 | Backup | `python3 host/deploy.py backup < /dev/null`; the reported directory belongs to the owner |
 | Upgrade | For Git use `git pull --ff-only`; unpack a release into a fresh source directory. Only after obtaining the new code run `python3 host/deploy.py update < /dev/null` |
-| Restore | [Host backup and restore](https://github.com/ferretgeek/prokbot-plus/blob/v1.1.0/host/README.en.md#data-and-backups): restore into a new project, never over the original volumes |
+| Restore | Prepare a fresh project using the [volume recovery checklist](#volume-recovery); never restore over the original volumes |
 
-Upgrade briefly pauses containers for backup, then builds and starts the new version. Backup or build failure does not switch running containers. A startup failure is not an automatic rollback. Never delete volumes or use `down -v`. Repeat the conversation and desktop checks. Rebuild clients only for client changes; Android updates require the original signing key.
+An update builds the candidate first, then stops the original project, backs up its volumes and switches. If startup fails, check whether shutdown was confirmed; never attach the old image to potentially migrated volumes. Do not delete volumes or use `down -v`.
+
+<a id="volume-recovery"></a>
+### Volume backup and recovery
+
+The backup contains archives of the project's managed data volumes and a checksum manifest. **It does not include Docker images, the instance directory's `.env`, or the host operating system.** A local deployment archives `host-data`, `box-home` and `box-workspace`. In split mode the Host archives only `host-data`; back up `gateway-data`, `box-home` and `box-workspace` separately on the execution machine. Volumes can contain device credentials, model keys, conversations and workspace files. Keep backups private to the owner.
+
+1. Retain the volume backup, original `.env`, matching code revision and images separately. `serviceImages` in the manifest records full IDs, not image contents. The target daemon must already have those exact images; a tag with the same name is not sufficient.
+2. Confirm that the original instance and every copy of its identity on other daemons are stopped. Coordinate writes on both machines for a split backup. Project locks apply only within one Docker daemon. Across daemons the operator must serialize operations and prevent two copies of the identity from running. Do not start recovery while this is uncertain.
+3. Use a fresh instance directory, project name and volumes. Recreate the original topology and public address. The Data and backups section in the Host package's `host/README.en.md` contains the `init` and `recover` example and a volume-only alternative. After startup, use the previously paired device to read its messages, attachments and settings, then test new chat and desktop operations. Extracting the archives alone does not establish recovery.
 
 <a id="appendix-b-troubleshooting"></a>
 ## Troubleshooting

@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { inspectRecipe } from './recipe-pin.mjs';
+import { windowsInputs } from '../windows/patchers/desktop/inputs.mjs';
 import { readZip } from '../android/patchers/apk.mjs';
 import { verifyShellVersion } from '../android/patchers/shell-version.mjs';
 
@@ -45,24 +46,31 @@ for (const file of ['compose.yaml', 'compose.execution.yaml']) {
   assert.ok(compose.split('\n  box:\n')[1]?.includes(`platform: ${host.box.platform}`), `wrong desktop platform in ${file}`);
 }
 const versions = { host: host.archive.version, desktop: `${host.box.localTag} (${host.box.platform})` };
-const desktopPins = {};
-for (const name of ['mac', 'windows']) {
-  const dir = `${name}/patchers/desktop`;
+async function checkDesktop(dir) {
   const original = await json(`${dir}/supported.json`);
   assert.match(original.archive.sha256, /^[0-9a-f]{64}$/);
   const list = (await json(`${dir}/recipes/manifest.json`)).files;
-  const pins = desktopPins[name] = await checkRecipes(`${dir}/recipes`, list, 'recipe');
-  assert.equal(pins.get('dist/electron-preload/preload.cjs')?.input, original.preloadSha256, `${name}: stale preload source`);
+  const pins = await checkRecipes(`${dir}/recipes`, list, 'recipe');
+  // Windows 1.1.0 keeps the original preload, which the archive digest already pins.
+  const preload = pins.get('dist/electron-preload/preload.cjs');
+  if (preload) assert.equal(preload.input, original.preloadSha256, `${dir}: stale preload source`);
   const policy = await json(`${dir}/notification-policy.json`);
   const source = list.find(item => item.source === policy.source);
-  assert.ok(source, `${name}: missing notification policy source`);
-  assert.equal(pins.get(source.path).input, policy.sourceSha256, `${name}: stale notification policy source`);
+  assert.ok(source, `${dir}: missing notification policy source`);
+  assert.equal(pins.get(source.path).input, policy.sourceSha256, `${dir}: stale notification policy source`);
+  return { original, pins };
+}
+const desktopPins = {};
+for (const name of ['mac', 'windows']) {
+  const { original, pins } = await checkDesktop(`${name}/patchers/desktop`);
+  desktopPins[name] = pins;
   versions[name] = original.version;
 }
 const android = await json('android/patchers/supported.json');
-assert.equal(android.desktopVersion, versions.windows, 'Android must match the Windows renderer input');
-assert.equal(desktopPins.windows.get('dist/renderer/index.html')?.output, android.rendererIndexSha256, 'stale Android renderer index');
-assert.equal(desktopPins.windows.get('dist/electron-preload/preload.cjs')?.output, android.preloadSha256, 'stale Android preload');
+const androidInputs = relative(root, (await windowsInputs(android.desktopVersion)).directory).replaceAll('\\', '/');
+const androidPins = androidInputs === 'windows/patchers/desktop' ? desktopPins.windows : (await checkDesktop(androidInputs)).pins;
+assert.equal(androidPins.get('dist/renderer/index.html')?.output, android.rendererIndexSha256, 'stale Android renderer index');
+assert.equal(androidPins.get('dist/electron-preload/preload.cjs')?.output, android.preloadSha256, 'stale Android preload');
 assert.equal(await sha(android.shell.path), android.shell.sha256, 'Android shell digest mismatch');
 const shell = verifyShellVersion(readZip(await bytes(android.shell.path)).entries, android.shell);
 const ios = await json('ios/recipes/ios/manifest.json');

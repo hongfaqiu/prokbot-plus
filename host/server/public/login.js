@@ -32,7 +32,7 @@ export function createLoginStage() {
   for (const type of ['focus', 'blur', 'input']) password.addEventListener(type, follow);
   password.addEventListener('input', () => { if (!message.hidden) say(); });
   return {
-    show() { say(); stopBlink(); stopBlink = blink(() => [face]); follow(); },
+    show(message) { say(message); stopBlink(); stopBlink = blink(() => [face]); follow(); },
     hide() { stopBlink(); },
     thinking() { form.classList.add('pending'); state('up'); },
     async error(text) {

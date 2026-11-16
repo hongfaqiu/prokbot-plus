@@ -10,6 +10,7 @@ ProkBot Plus 是 ProkBot（https://gitee.com/ahaduoduoduo/ProkBot ，基于提�
 相对上游新增了 Windows x64 客户端、Android 客户端、Anthropic Messages 和 OpenAI Responses 两种模型接口，以及一批修复。
 
 用户面向的文档：
+- `docs/HANDOFF.md` / `docs/HANDOFF.en.md`：接手时先核对发布版、主分支与未提交候选，查看修改和验证入口；
 - `README.md`；
 - `docs/AI-INSTALL.md`（部署手册）；
 - `docs/ARCHITECTURE.md`（技术文档）；
@@ -22,8 +23,8 @@ ProkBot Plus 是 ProkBot（https://gitee.com/ahaduoduoduo/ProkBot ，基于提�
 | 路径 | 内容 |
 | --- | --- |
 | `host/` | 服务端：`release/` 构建与部署，`server/` 管理服务和管理网页，`runtime/` 注入原版 Host 的运行时（模型适配、联网与图片、自动审查、可靠性层），`tools/host-admin.mjs` 命令行管理，`network/` Tailcat 源码，`tests/` |
-| `mac/` | `clients/desktop/` 是桌面客户端主进程，**Mac 和 Windows 共用**，Android 也复制其中三个文件；其中的 `*-settings-extension.js` 没有被代码引用，但它们是 recipe 加进原版设置页的代码的源码，不要当成无用文件删除。`patchers/desktop/` 是 Mac 补丁和原版下载器（含 vendored `node_modules`） |
-| `windows/` | Windows 补丁、由 Mac recipe 移植的 recipe、安装器源码（Go）、预编译的 Tailcat 和安装器 stub、`tests/` |
+| `mac/` | `clients/desktop/` 是桌面客户端主进程，**Mac 和 Windows 共用**，Android 也复制其中三个文件；其中的 `*-settings-extension.js` 没有被代码引用，但它们是 0.71.2 recipe 加进原版设置页的代码的源码，不要当成无用文件删除。`patchers/desktop/` 是 Mac 补丁和原版下载器（含 vendored `node_modules`） |
+| `windows/` | Windows 补丁（固定官方 1.1.0）、安装器源码（Go）、预编译的 Tailcat 和安装器 stub、`tests/`。`tools/desktop-recipes/` 按 `spec.mjs` 的锚点修改生成 1.1.0 recipe，`extensions/` 是 recipe 追加进原版模块的代码的源码；`patchers/desktop/0.71.2/` 是 Android 仍在用的旧版输入和由 Mac recipe 移植的 recipe |
 | `ios/` | iOS 注入库源码、字节码补丁数据、IPA 补丁工具 |
 | `android/` | `shell/` 是 Android 外壳（Kotlin），`dist/` 是它的预编译 APK；`client/` 是 WebView 里代替 Electron 的桥接；`patchers/` 是生成和签名 APK 的工具；`tests/`。解压官方安装包的代码与 Windows 共用（`windows/patchers/desktop/original.mjs`） |
 | `docs/` | 部署手册、技术文档、README 截图 |
@@ -39,6 +40,7 @@ node --test "windows/tests/*.test.mjs"     # Windows 客户端
 node --test "mac/tests/*.test.mjs"         # Mac / 共用客户端
 node --test "android/tests/*.test.mjs"     # Android 客户端
 node windows/patchers/desktop/patch.mjs    # 在 Windows 上生成客户端，输出 windows/output/（已忽略）
+node windows/tools/desktop-recipes/build.mjs --check   # 改了 spec.mjs 或 extensions/ 后去掉 --check 重新生成 recipe
 node android/patchers/patch.mjs            # 生成 Android APK，输出 android/output/（已忽略）
 node android/shell/release-shell.mjs       # 改了 android/shell/ 后重建预编译外壳并更新摘要（需要 JDK 17+ 和 Android SDK）
 python3 host/release/build-docker.py       # 在 Linux 上构建服务端镜像 grokbot-host:local
@@ -85,7 +87,7 @@ python3 ios/tests/ios-network.test.py      # iOS 网络层 1 项，只能在装�
    - `android windows mac`（Android 补丁依赖 `windows/` 和 `mac/`）。
 
    `git archive` 会保留可执行权限。
-3. 生成 `SHA256SUMS.txt`。把每个包解压到独立目录跑测试；Windows 包和 Android 包各用官方安装包执行一次 `patch.mjs --source <安装包> --verify-only`。
+3. 生成 `SHA256SUMS.txt`。把每个包解压到独立目录跑测试；Windows 包用官方 1.1.0、Android 包用官方 0.71.2 Windows 安装包各执行一次 `patch.mjs --source <安装包> --verify-only`。
 4. `gh release create v<版本> --target main --title "ProkBot Plus <版本>" --notes-file <中英双语说明> <5 个 zip> SHA256SUMS.txt`。
 
    **不要附带打好补丁的客户端。**

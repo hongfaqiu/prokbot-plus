@@ -1,6 +1,6 @@
 // OpenAI Chat Completions format (OpenAI and compatible services such as DeepSeek).
 import { explicitEffort, fileKind, fileText, mediaUrl, messageParts, ModelRequestError, parseEvent, parseToolArguments,
-  postWithFallback, readSse, reasoningOrigin, reasoningProviderOptions, serializeToolCalls, textValue, toolSchema,
+  postWithFallback, providerError, readSse, reasoningOrigin, reasoningProviderOptions, rejectedOption, streamToolCalls, textValue, toolSchema,
   unsupportedFileNote } from './model-common.mjs';
 
 export const FORMAT = 'openai';
@@ -94,14 +94,18 @@ export function convertChatTools(tools = []) {
   });
 }
 
-const OPTIONAL = ['stream_options', 'reasoning_effort', 'thinking', 'max_tokens', 'max_completion_tokens', 'reasoning_content'];
+const OPTIONAL = ['stream_options', 'reasoning_effort', 'thinking', 'max_tokens', 'max_completion_tokens'];
 
 /** One streamed Chat Completions turn; yields Harness stream parts, returns the assembled message. */
 export async function* chatTurn(context) {
-  const { fetchImpl, endpoint, apiKey, headers, model, messages, tools, effort, maxTokens, requestOptions, signal, state,
+  const { fetchImpl, endpoint, apiKey, headers, model, messages, tools, effort, maxTokens, requestOptions, signal, waitForIO, state,
     notifyRequest, onModel, onId, onUsage } = context;
   const functions = convertChatTools(tools);
-  const { http } = await postWithFallback({ fetchImpl, url: endpoint, apiKey, signal, state, optional: OPTIONAL,
+  const { http } = await postWithFallback({ fetchImpl, url: endpoint, apiKey, signal, waitForIO, state, optional: OPTIONAL,
+    fallbacks: [{ name: 'retry without replayed reasoning', applies: (error, body) => error.status === 400 &&
+      body.messages.some(message => message.reasoning_content) &&
+      (/(?:^|\.)reasoning_content$/.test(error.param ?? '') || rejectedOption(error, ['reasoning_content'])),
+      apply: () => { state.stripReasoning = true; } }],
     headers: () => {
       const value = new Headers(headers);
       value.set('content-type', 'application/json');
@@ -112,18 +116,18 @@ export async function* chatTurn(context) {
     build: () => {
       const limit = maxTokens === undefined ? undefined : maxTokensParameter(model, state.dropped);
       return { ...requestOptions, ...chatReasoning(model, effort), model,
-        messages: convertChatMessages(messages, { model, replayReasoning: !state.dropped.has('reasoning_content') }),
+        messages: convertChatMessages(messages, { model, replayReasoning: !state.stripReasoning }),
         stream: true, stream_options: { ...requestOptions?.stream_options, include_usage: true },
         ...(functions.length ? { tools: functions } : {}), ...(limit ? { [limit]: maxTokens } : {}) };
     } });
   notifyRequest(http.headers.get('x-request-id') ?? http.headers.get('request-id'));
   let id, responseModel = model, text = '', reasoning = '', rawUsage = {}, finishReason, receivedChoice = false, receivedDone = false;
   const toolCalls = new Map(), options = () => ({ providerOptions: reasoningProviderOptions({ format: FORMAT, model: responseModel }) });
-  for await (const data of readSse(http.body)) {
+  for await (const data of readSse(http.body, { waitForIO })) {
     signal.throwIfAborted();
     if (data.trim() === '[DONE]') { receivedDone = true; break; }
     const chunk = parseEvent(data);
-    if (chunk.error) throw new ModelRequestError(chunk.error.message ?? 'Model stream failed', { code: chunk.error.code ?? chunk.error.type });
+    if (chunk.error) throw providerError(chunk, undefined, http.headers, apiKey);
     if (chunk.id) { id = chunk.id; onId(id); notifyRequest(id); }
     if (chunk.model) { responseModel = chunk.model; onModel(responseModel); }
     if (chunk.usage) { rawUsage = { ...rawUsage, ...chunk.usage }; onUsage(rawUsage); }
@@ -148,10 +152,12 @@ export async function* chatTurn(context) {
     }
   }
   signal.throwIfAborted();
-  if (!receivedChoice || (!receivedDone && !finishReason)) throw new ModelRequestError('Model SSE stream ended before a completion marker');
   if (finishReason === 'length' || finishReason === 'content_filter') {
     throw new ModelRequestError(`Model response stopped with ${finishReason}`, { code: finishReason });
   }
+  if (!receivedChoice || !receivedDone || !finishReason) throw new ModelRequestError('Model SSE stream ended before a completion marker');
+  if (!['stop', 'tool_calls'].includes(finishReason)) throw new ModelRequestError(`Unsupported model finish reason: ${finishReason}`);
+  if ((finishReason === 'tool_calls') !== Boolean(toolCalls.size)) throw new ModelRequestError('Model tool calls do not match the finish reason');
   const content = [];
   if (reasoning) content.push({ type: 'reasoning', text: reasoning, ...options() });
   if (text) content.push({ type: 'text', text });
@@ -159,7 +165,7 @@ export async function* chatTurn(context) {
     if (!call.id || !call.name) throw new ModelRequestError('Incomplete model tool call identity');
     return { type: 'tool-call', toolCallId: call.id, toolName: call.name, args: parseToolArguments(call.name, call.arguments) };
   });
-  yield* serializeToolCalls(calls);
+  yield* streamToolCalls(calls, messages);
   content.push(...calls);
   return { id, model: responseModel, content, toolCalls: calls.length, usage: rawUsage };
 }

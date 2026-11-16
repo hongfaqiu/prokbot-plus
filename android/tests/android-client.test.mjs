@@ -479,3 +479,93 @@ test('a Bot row shows when the Bot was last active, as the official phone app do
   assert.equal(time(null), null);
   assert.equal(time(0), null);
 });
+
+test('Android connect page supports switching between pairing code and Host admin password', async t => {
+  const { readFile } = await import('node:fs/promises');
+  class ClassList {
+    constructor() { this.set = new Set(); }
+    toggle(name, force) { if (force === undefined) { if (this.set.has(name)) this.set.delete(name); else this.set.add(name); } else if (force) this.set.add(name); else this.set.delete(name); }
+    contains(name) { return this.set.has(name); }
+  }
+  class Elem extends EventTarget {
+    constructor() {
+      super();
+      this.value = '';
+      this.hidden = false;
+      this.disabled = false;
+      this.checked = false;
+      this.textContent = '';
+      this.placeholder = '';
+      this.attrs = {};
+      this.classList = new ClassList();
+      this.options = Array.from({ length: 5 }, () => ({ textContent: '' }));
+    }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    focus() {}
+    replaceChildren() {}
+  }
+  const elements = new Map();
+  const getEl = sel => {
+    if (!elements.has(sel)) elements.set(sel, new Elem());
+    return elements.get(sel);
+  };
+  const connectJsPath = path.join(client.root, 'connect.js');
+  const connectHtml = await readFile(path.join(repo, 'android/client/connect.html'), 'utf8');
+  assert.match(connectHtml, /id="mode-code"/);
+  assert.match(connectHtml, /id="mode-password"/);
+  assert.match(connectHtml, /id="password"/);
+
+  const pairPayloads = [];
+  const oldGlobals = {
+    document: globalThis.document,
+    window: globalThis.window,
+    matchMedia: globalThis.matchMedia,
+    Option: globalThis.Option,
+  };
+  let pairIndex = 0;
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    if (url === '/__native/pair') {
+      pairPayloads.push(JSON.parse(init.body));
+      return Response.json(pairIndex++ === 0 ? { ok: false, error: 'expired' } : { ok: true });
+    }
+    return Response.json({ ok: true });
+  });
+  Object.assign(globalThis, {
+    document: { documentElement: {}, title: '', querySelector: getEl },
+    window: { __grokbotAndroidBoot: { locale: 'en', connection: { paired: false } } },
+    matchMedia: () => ({ matches: true }),
+    Option: class { constructor(text, value) { this.text = text; this.value = value; } },
+  });
+  t.after(() => {
+    for (const [k, v] of Object.entries(oldGlobals)) {
+      if (v === undefined) delete globalThis[k];
+      else globalThis[k] = v;
+    }
+  });
+
+  await import(pathToFileURL(connectJsPath).href);
+  assert.equal(getEl('#key-group').hidden, false);
+  assert.equal(getEl('#password-group').hidden, true);
+
+  getEl('#server').value = 'https://host.example';
+  getEl('#key').value = 'ab-c234';
+  getEl('#form').dispatchEvent(new Event('submit', { cancelable: true }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(pairPayloads[0], { server: 'https://host.example', key: 'ABC234', edit: false });
+
+  getEl('#mode-password').dispatchEvent(new Event('click'));
+  assert.equal(getEl('#key-group').hidden, true);
+  assert.equal(getEl('#password-group').hidden, false);
+
+  // Empty password should not call /__native/pair.
+  getEl('#password').value = '';
+  getEl('#form').dispatchEvent(new Event('submit', { cancelable: true }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(pairPayloads.length, 1);
+
+  getEl('#password').value = 'AdminSecret123';
+  getEl('#form').dispatchEvent(new Event('submit', { cancelable: true }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(pairPayloads[1], { server: 'https://host.example', password: 'AdminSecret123', edit: false });
+  assert.equal(getEl('#password').value, '');
+});

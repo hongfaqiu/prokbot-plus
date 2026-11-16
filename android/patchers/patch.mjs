@@ -14,6 +14,7 @@ import { applyReleaseRecipes } from '../../mac/patchers/desktop/release-recipes.
 import { acquireDesktopSource } from '../../mac/patchers/desktop/download-original.mjs';
 import { applicationIcon } from '../../windows/patchers/desktop/pe.mjs';
 import { unpackOriginal } from '../../windows/patchers/desktop/original.mjs';
+import { windowsInputs } from '../../windows/patchers/desktop/inputs.mjs';
 import { readZip, writeZip, createEntry, entryBytes, signApk, verifyApk, createSigningIdentity, certificateFingerprint } from './apk.mjs';
 import { RENDERER_PATCHES, applyPinnedRendererPatch } from './renderer-patches.mjs';
 import { checkBuildOutput, writeBuildOutput } from './output.mjs';
@@ -23,7 +24,6 @@ import { normalizeEcPublicKey } from './release-sign.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const androidRoot = path.resolve(here, '..');
 const repo = path.resolve(androidRoot, '..');
-const windowsDesktop = path.join(repo, 'windows/patchers/desktop');
 const sharedAssets = ['i18n.mjs', 'external-url.mjs', 'connectors.mjs', 'workspace.css', 'workspace-keys.cjs'];
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 async function hashFile(filename) {
@@ -33,7 +33,8 @@ async function hashFile(filename) {
 }
 const exists = async filename => { try { await stat(filename); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } };
 
-export const BRIDGE_TAGS = '<script src="../client/boot-data.js"></script>\n    <script src="../client/desktop/workspace-keys.js"></script>\n    <script type="module" src="../client/bridge.js"></script>\n    <link rel="stylesheet" href="../client/android.css">\n    <link rel="stylesheet" href="../client/desktop/workspace.css">\n    ';
+// compat.js is a classic script: it runs before every module, so missing built-ins exist first.
+export const BRIDGE_TAGS = '<script src="../client/boot-data.js"></script>\n    <script src="../client/compat.js"></script>\n    <script src="../client/desktop/workspace-keys.js"></script>\n    <script type="module" src="../client/bridge.js"></script>\n    <link rel="stylesheet" href="../client/android.css">\n    <link rel="stylesheet" href="../client/desktop/workspace.css">\n    ';
 const MODULE_ANCHOR = '<script type="module" crossorigin src="./assets/index-';
 const FRAME_ANCHOR = 'frame-src sand-html-preview: sand-canvas: sand-mcp-app:;';
 
@@ -157,9 +158,8 @@ export async function loadSigningIdentity(filename) {
 async function main() {
   const args = process.argv.slice(2);
   const arg = name => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : null; };
-  const supported = JSON.parse(await readFile(path.join(windowsDesktop, 'supported.json'), 'utf8'));
   const build = JSON.parse(await readFile(path.join(here, 'supported.json'), 'utf8'));
-  if (build.desktopVersion !== supported.version) throw new Error('Android renderer pin does not match the Windows source version.');
+  const { directory: windowsDesktop, supported } = await windowsInputs(build.desktopVersion);
   const { versionName, versionCode } = build.shell;
   if (!/^\d+\.\d+\.\d+$/.test(versionName) || !Number.isSafeInteger(versionCode) || versionCode <= 0)
     throw new Error('Invalid Android shell version pin.');

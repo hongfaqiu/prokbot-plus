@@ -7,7 +7,8 @@ window.connection = { locale };
 const { grokText: text } = await import('./desktop/i18n.mjs');
 
 const $ = selector => document.querySelector(selector);
-const server = $('#server'), serverLabel = $('[for=server]'), tailcat = $('#tailcat'), key = $('#key'), status = $('#status'), connect = $('#connect');
+const server = $('#server'), serverLabel = $('[for=server]'), tailcat = $('#tailcat'), key = $('#key'), password = $('#password'), status = $('#status'), connect = $('#connect');
+const keyGroup = $('#key-group'), passwordGroup = $('#password-group'), modeCode = $('#mode-code'), modePassword = $('#mode-password');
 const paired = $('#paired'), background = $('#background'), disconnect = $('#disconnect'), workspace = $('#workspace');
 const permBtn = $('#perm-btn'), batteryBtn = $('#battery-btn');
 const pushProvider = $('#push-provider'), upDistributor = $('#up-distributor');
@@ -22,17 +23,21 @@ let current = boot.connection ?? {};
 let pushState = boot.push ?? {};
 let updateStatus = boot.updateStatus ?? null;
 let backgroundEnabled = boot.settings?.backgroundNotifications !== false;
-let busy = false, composing = false;
+let busy = false, composing = false, authMode = 'code';
 
 document.documentElement.lang = /^zh/i.test(locale) ? 'zh-CN' : 'en';
 document.title = text('连接 Grok Bot', 'Connect Grok Bot');
 $('#edition').textContent = text('ProkBot Plus · 自开发 Android 客户端（非官方）', 'ProkBot Plus · Independently developed Android client (unofficial)');
 $('h1').textContent = text('连接你的 Grok Bot', 'Connect your Grok Bot');
-$('.lead').textContent = text('填写 Host 地址，再到 Host 管理页「设备与通知」生成 6 位配对码。',
-  'Enter the Host address, then create a six-character pairing code under Devices & Notifications on the Host admin page.');
+$('.lead').textContent = text('填写 Host 地址，使用 Host 管理员密码自动配对，或在管理页「设备与通知」生成 6 位配对码。',
+  'Enter the Host address, then pair automatically with the Host admin password or a six-character pairing code from Devices & Notifications.');
 serverLabel.textContent = text('Host 地址', 'Host address');
+modeCode.textContent = text('配对码', 'Pairing code');
+modePassword.textContent = text('管理员密码', 'Admin password');
 $('[for=key]').textContent = text('配对码', 'Pairing code');
 key.placeholder = text('6 位配对码', 'Six characters');
+$('[for=password]').textContent = text('管理员密码', 'Admin password');
+password.placeholder = text('Host 管理员密码', 'Host admin password');
 $('#background-label').textContent = text('后台保活连接', 'Background notification service');
 $('#background-hint').textContent = text('在前台服务中保持连接并即时弹出通知；配合下方推送渠道可在系统休眠或杀后台后唤醒。',
   'Keeps a foreground service connection for instant alerts; pair with a push provider below for wakeups after system sleep.');
@@ -66,6 +71,19 @@ const updateTransport = () => {
   server.inputMode = tailcat.checked ? 'text' : 'url';
 };
 tailcat.addEventListener('change', updateTransport);
+function setAuthMode(nextMode) {
+  authMode = nextMode === 'password' ? 'password' : 'code';
+  const isPassword = authMode === 'password';
+  keyGroup.hidden = isPassword;
+  passwordGroup.hidden = !isPassword;
+  modeCode.classList.toggle('active', !isPassword);
+  modePassword.classList.toggle('active', isPassword);
+  modeCode.setAttribute('aria-pressed', String(!isPassword));
+  modePassword.setAttribute('aria-pressed', String(isPassword));
+}
+setAuthMode('code');
+modeCode.addEventListener('click', () => { if (!busy) { setAuthMode('code'); key.focus(); } });
+modePassword.addEventListener('click', () => { if (!busy) { setAuthMode('password'); password.focus(); } });
 
 function renderPush() {
   const auth = pushState.authorization || 'not_determined';
@@ -161,7 +179,7 @@ function setStatus(message, ok = false) {
 }
 function setBusy(value) {
   busy = value;
-  for (const control of [tailcat, server, key, connect, disconnect, workspace, background,
+  for (const control of [tailcat, server, modeCode, modePassword, key, password, connect, disconnect, workspace, background,
     permBtn, batteryBtn, pushProvider, upDistributor, ntfyUrl, ntfyToken, webhookUrl, webhookSecret, fcmToken,
     pushSave, pushTest, updateCheck, updateInstall]) {
     if (control) control.disabled = value;
@@ -191,36 +209,49 @@ server.addEventListener('change', () => { server.value = halfWidth(server.value)
 form.addEventListener('submit', async event => {
   event.preventDefault();
   if (busy || composing) return;
-  tidyKey();
-  const address = halfWidth(server.value), code = key.value.trim(), tunneled = tailcat.checked;
+  const address = halfWidth(server.value), tunneled = tailcat.checked;
   if (!address) {
     setStatus(tunneled ? text('请输入 Tailcat 连接链接。', 'Enter the Tailcat connection link.') : text('请输入 Host 地址。', 'Enter the Host address.'));
     server.focus(); return;
   }
-  let sameOrigin = false;
-  if (usable() && tunneled === (current.tailcat === true)) {
-    try {
-      if (tunneled) {
-        sameOrigin = tailcatLink(address) === tailcatLink(current.server);
-      } else {
-        const candidate = new URL(address), saved = new URL(current.server);
-        sameOrigin = /^(https?:)$/.test(candidate.protocol) && !candidate.username && !candidate.password &&
-          candidate.pathname === '/' && !candidate.search && !candidate.hash && candidate.origin === saved.origin;
-      }
-    } catch { /* Native pairing validates the complete address before sending a new code. */ }
+  let payload;
+  if (authMode === 'password') {
+    const secret = password.value;
+    if (!secret) {
+      setStatus(text('请输入 Host 管理员密码。', 'Enter the Host admin password.'));
+      password.focus(); return;
+    }
+    payload = { server: address, password: secret, edit: false, ...(tunneled ? { tailcat: true } : {}) };
+  } else {
+    tidyKey();
+    const code = key.value.trim();
+    let sameOrigin = false;
+    if (usable() && tunneled === (current.tailcat === true)) {
+      try {
+        if (tunneled) {
+          sameOrigin = tailcatLink(address) === tailcatLink(current.server);
+        } else {
+          const candidate = new URL(address), saved = new URL(current.server);
+          sameOrigin = /^(https?:)$/.test(candidate.protocol) && !candidate.username && !candidate.password &&
+            candidate.pathname === '/' && !candidate.search && !candidate.hash && candidate.origin === saved.origin;
+        }
+      } catch { /* Native pairing validates the complete address before sending a new code. */ }
+    }
+    if (usable() && !code && !sameOrigin) {
+      setStatus(text('更换 Host 地址须使用新 Host 的配对码。', 'Enter a new pairing code to change Host.'));
+      key.focus(); return;
+    }
+    const edit = usable() && !code && sameOrigin;
+    if (!edit && code.length !== 6) { setStatus(text('请输入 6 位配对码。', 'Enter the six-character pairing code.')); key.focus(); return; }
+    payload = { server: address, key: code, edit, ...(tunneled ? { tailcat: true } : {}) };
   }
-  if (usable() && !code && !sameOrigin) {
-    setStatus(text('更换 Host 地址须使用新 Host 的配对码。', 'Enter a new pairing code to change Host.'));
-    key.focus(); return;
-  }
-  const edit = usable() && !code && sameOrigin;
-  if (!edit && code.length !== 6) { setStatus(text('请输入 6 位配对码。', 'Enter the six-character pairing code.')); key.focus(); return; }
   setBusy(true);
   setStatus(text('正在连接…', 'Connecting…'), true);
   try {
-    const result = await native('pair', { server: address, key: code, edit, ...(tunneled ? { tailcat: true } : {}) });
+    const result = await native('pair', payload);
     if (!result.ok) throw new Error(result.error);
     key.value = '';
+    password.value = '';
     setStatus(text('已连接，正在打开工作区…', 'Connected. Opening the workspace…'), true);
   } catch (error) {
     setStatus(error.message);
@@ -235,6 +266,7 @@ disconnect.addEventListener('click', async () => {
     current = { paired: false };
     pushState = { provider: 'none', authorization: pushState.authorization, batteryOptimizationIgnored: pushState.batteryOptimizationIgnored, distributors: pushState.distributors };
     key.value = '';
+    password.value = '';
     ntfyUrl.value = '';
     ntfyToken.value = '';
     webhookUrl.value = '';
@@ -361,3 +393,5 @@ window.__grokbotAndroid = Object.freeze({
 const dark = matchMedia('(prefers-color-scheme: dark)').matches;
 void native('theme', { dark, background: dark ? '#111111' : '#ffffff' }).catch(() => {});
 render();
+// compat.js shows an explanation instead of a blank form if this point is never reached.
+window.__grokbotStarted = true;

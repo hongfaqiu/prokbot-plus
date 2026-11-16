@@ -7,7 +7,7 @@ import { readdirSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Auth } from "./auth.mjs";
+import { Auth, handleConnectPair } from "./auth.mjs";
 import { Models } from "./models.mjs";
 import { Speech } from "./speech.mjs";
 import { VoiceConfig } from './voice-config.mjs';
@@ -372,7 +372,8 @@ export async function createSelfHostServer(options = {}) {
         startedAt: bootAt,
         publicUrl: origin,
         model,
-        host,
+        host: { ...host, waitingForExecutionNode: !host.connected &&
+          process.env.GROKBOT_REQUIRE_EXECUTION_NODE === '1' && !executionNode.store.value.config.enabled },
         devices: push.devices(),
         pairingKeys: auth.pairingKeys(),
         notifications: {
@@ -512,15 +513,7 @@ export async function createSelfHostServer(options = {}) {
         initialized: auth.initialized,
       });
     if (request.method === "POST" && path === "/connect/pair") {
-      check(federation.role() === 'primary', 403, 'Connect to the primary Host');
-      limiter.check(`pair:${request.socket.remoteAddress}`, 6);
-      limiter.check("pair:global", 60);
-      const result = await auth.pair(await jsonBody(request));
-      return sendJson(response, 201, {
-        ...result,
-        gatewayUrl: origin,
-        notificationUrl: `${origin}/notifications/events`,
-      });
+      return handleConnectPair({ request, response, origin, auth, federation, limiter });
     }
     if (request.method === 'GET' && ['/local/notification-settings', '/local/notification-settings/events'].includes(path)) {
       const found = device(request); connections.track(found.id, response);

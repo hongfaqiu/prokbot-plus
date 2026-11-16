@@ -23,9 +23,11 @@ jobs:
           node-version: '22'
           package-manager-cache: false
       - run: node ci/check-inputs.mjs
+      - run: node --test "ci/*.test.mjs"
       - run: node --test "host/tests/*.test.mjs" "mac/tests/*.test.mjs" "windows/tests/*.test.mjs" "android/tests/*.test.mjs"
       - if: runner.os == 'Windows'
         working-directory: windows/installer
         run: go test ./...
       - if: runner.os == 'macOS'
         run: python3 ios/tests/ios-network.test.py
+      - run: python -B ios/tests/ios-release.test.py

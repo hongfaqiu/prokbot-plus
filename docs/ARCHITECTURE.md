@@ -41,7 +41,7 @@ flowchart LR
 | 更新原版 Host 或桌面 | `host/recipes/host/manifest.json` 和同目录补丁；ARM 原生依赖锁在 `host/release/arm-runtime/` | 摘要校验、生成补丁、目标镜像、旧卷启动、实际对话和桌面 |
 | 新增服务端功能 | `host/server/` 负责管理 API、持久化与页面；`host/runtime/` 负责原版 Agent 和模型行为 | 管理页保存后，客户端对话是否真的用上设置 |
 | 更新桌面 / 手机 | Mac 与 Windows 共用 `mac/clients/desktop/`；Windows 解包器和 recipe 也是 Android 的输入；iOS 独立 | 每个平台的 `supported.json` 或 recipe 清单、签名、配对。共享代码改动要测所有使用方 |
-| 增加可选能力 | 先看能否做成应用或技能：[应用开发](../host/README.md#应用开发)；只有需要改变 Host 行为才改运行时 | 安装、授权、调用和移除；不修改官方程序或把它带进发布包 |
+| 增加可选能力 | 先看能否做成应用或技能：[应用开发](#app-development)；只有需要改变 Host 行为才改运行时 | 安装、授权、调用和移除；不修改官方程序或把它带进发布包 |
 
 ## 功能对照
 
@@ -79,14 +79,14 @@ flowchart LR
 
 | 功能 | 说明 |
 | --- | --- |
-| **应用** | 一个 JSON 文件就是一个应用，可以带代码、远程 MCP 服务或技能。代码应用运行在执行电脑上。Bot 也可以用内置的「编写应用」自己写应用。见[应用开发](../host/README.md#应用开发) |
+| **应用** | 一个 JSON 文件就是一个应用，可以带代码、远程 MCP 服务或技能。代码应用运行在执行电脑上。Bot 也可以用内置的「编写应用」自己写应用。见[应用开发](#app-development) |
 | **Webhook** | 外部系统发一个签名请求，Bot 就开始执行任务 |
 | **用量统计** | 每天用了多少 Token，在管理页和 iOS 设置里都能看到 |
 | **提示词管理** | 可以修改系统提示词并随时恢复原版，还能看到每个角色实际收到的提示词和工具 |
 | **按模型设置上下文** | 每个模型的容量和开始摘要的时机可以单独设置 |
 | **管理网页** | 所有设置都在浏览器里完成，支持中英文、深浅色和手机屏幕 |
-| **分开部署** | Host 和执行电脑可以放在不同的机器上，见 [host/README.md](../host/README.md#分开部署执行电脑) |
-| **备份恢复** | 备份选定项目的受管卷，在未使用的项目名下恢复；不含镜像、实例 `.env`、其他主机或操作系统，也不保证备份后新写入的消息。 |
+| **分开部署** | Host 和执行电脑可以放在不同的机器上，见[分机部署](AI-INSTALL.md#split-host) |
+| **备份恢复** | 归档本项目管理的数据卷及校验清单，恢复到新项目；不含 Docker 镜像、实例 `.env` 或宿主机系统。见[卷备份与恢复](AI-INSTALL.md#volume-recovery) |
 
 ## 各部分的实现
 
@@ -150,6 +150,8 @@ flowchart LR
 - **可选参数回退**：服务商用 400 拒绝某个可选参数（例如 `reasoning.summary`、`max_tokens`、`fallbacks`）时，去掉它重试一次，在本次会话内记住，并在日志里打印 `[model] … retrying without …`。回放的推理失效时同样处理。
 - **已知网关问题**：有的聚合网关用 Responses 格式转发 Claude 时，只要请求带工具就返回 `native_thinking_replay_mismatch`。这是网关的问题，Claude 请用 Anthropic 格式。
 
+三种模型接口仅在收到完整终止标记后发布工具调用；中途 EOF、损坏编码、重复调用 ID 和取消均作为失败处理。
+
 ### 自动审查
 
 Bot 要在执行电脑或你的电脑上做有风险的操作时，原版会先问官方的分类服务。这里改为用你配置的模型来判断，沿用原版的分类提示词和结果格式（`host/runtime/host-auto-review.mjs`）。三种接口格式都支持。
@@ -204,6 +206,8 @@ Bot 要在执行电脑或你的电脑上做有风险的操作时，原版会先�
 
 `host/runtime/reliability/tool-order.mjs`（本版本新增）记下每次回复里 `SendToUser` / `SendToAgent` 的书写顺序，让每条消息等上一条执行完再开始，其他工具照常并行；前一条始终没执行时最多等 15 秒，取消时立即停止等待。
 
+如果上一步只有一个 `SendToUser` 纯文本调用、紧邻的 Host 工具回执明确成功，而下一次模型响应换了调用 ID 却只要求再发相同文本，适配层会在再次执行前以不可重试错误停止这一轮。此前已送达的消息和模型用量仍保留。这个判断不跨用户轮次，不按正文清理历史，不对附件、多工具步骤或没有成功回执的调用推断送达。
+
 ### 执行电脑
 
 原版每个用户有一台官方云电脑。这里直接使用同一个官方 Linux 桌面镜像，在你的 Docker 里运行，Host 通过带认证的连接操作它。执行电脑可以和 Host 放在同一台机器，也可以放到另一台。想让 Agent 操作你的电脑时，客户端会主动连到 Host，所以你的电脑不需要开放任何端口。
@@ -217,39 +221,25 @@ Bot 要在执行电脑或你的电脑上做有风险的操作时，原版会先�
 
 ### Windows 客户端（本版本新增）
 
-官方同版本的 Windows 客户端和 Mac 版用同一套 Electron 界面代码，差异只在构建编号、资源文件名、模块顺序和少数换行。
+`windows/patchers/desktop/patch.mjs` 接受固定版本 `Grok_Bot_1.1.0_Setup.exe`，也可用 `--source` 指定原版安装包、`app-64.7z` 或已安装目录。从 NSIS 安装包取出 `app-64.7z`，用 Windows 11 的 `tar.exe` 或 Windows 10 的 7-Zip 解包，核对 `resources/app.asar` 并回放 recipe。`--verify-only` 到此为止。生成客户端时换入共用主进程，重打 ASAR 并比对归档外的 `.node` 等文件清单。输出副本 `Grok Bot.exe` 的 ASAR 头摘要更新后不再带官方签名；一并输出 Tailcat、便携目录、便携 ZIP、安装包和 `*.patch.json`。传入完整的官方 0.71.2 安装包时，`known-unsupported.json` 让工具说明这是不兼容的官方旧版，而不是来源不明的文件。
 
-**补丁流程**（`windows/patchers/desktop/patch.mjs`）：
+1.1.0 的 recipe 由 `windows/tools/desktop-recipes/build.mjs` 生成。`spec.mjs` 中每处修改都以原文件里只出现一次的文本为锚点，未改动的原文写成复制区间，recipe 只新增本项目的代码（追加的模块在 `extensions/`）。`--check` 从官方安装包重新生成，并与已提交的 recipe 逐字节比较。Android 仍使用的 0.71.2 输入和 recipe 在 `windows/patchers/desktop/0.71.2/`，`inputs.mjs` 按版本找到对应目录。这组 recipe 由 `windows/tools/port-desktop-recipes.mjs` 生成：它为**同一版本**的 Mac 与 Windows 构建对齐资源名、导出名和复制范围，复制的字节来自 Windows 原件，不用于跨版本移植。
 
-1. 下载 `Grok_Bot_0.71.2_Setup.exe` 并校验 SHA-256，也可以用 `--source` 指定安装包、`app-64.7z` 或已安装的目录。
-2. 从 NSIS 安装包中切出 `app-64.7z`，用 Windows 11 自带的 `tar.exe` 解压（Windows 10 用 7-Zip）。
-3. 解开 `resources/app.asar`，主进程换成共用的 `mac/clients/desktop` 代码。
-4. 执行 `recipes/` 中的字节补丁。
-5. 重新打包 ASAR，不打包的 `.node` 等文件与原版逐个比对。
-6. `Grok Bot.exe` 内嵌了 ASAR 头的 SHA-256，补丁原位替换这个值，并移除因此失效的官方签名。
-7. 附加 `grokbot-tailcat.exe`，输出便携目录、便携 zip、安装包和 `*.patch.json` 清单。
+| 运行时 | Windows 上的行为 |
+| --- | --- |
+| 窗口、托盘与通知 | `platform.mjs` 用 `titleBarOverlay` 显示系统按钮。关窗后留在托盘；通知使用带 AppUserModelID 的开始菜单快捷方式。常规启动保留指向别处或不可读的快捷方式和现有 `grokbot-local:` 处理器。并行安装和隔离测试不注册两者，从并行目录直接运行。 |
+| 本机执行 | Host 识别为 `win32`、`win-<设备ID>`。`loadLocalExecDaemon` 为原版执行器打开 PowerShell UTF-8 输出；从 Git Bash 启动会改变 `cmd /c` 等参数，应从开始菜单启动常规安装。Windows 没有 Mac 的本机鼠标键盘组件。 |
+| 图片与 Codex | `remoteAttachmentPath` 按 POSIX 路径读取 Host 的 `file:///data/...` 图片。委派使用本机 `codex.exe`（含 npm 安装），结束时由 `taskkill /T` 终止进程树。 |
+| 1.1.0 界面接口 | preload 按 `desktop-mount`、`main`、`spotlight` 三条边声明方法，`local-services.mjs` 的 `desktopEdges` 按边注册处理器，窗口显示和隐藏以事件通知界面。全局搜索的 `searchMessages` / `searchFiles` 由 `gateway.mjs` 转为 Host 的 `searchAgents` / `searchMedia`。`dictation.mjs` 把界面送来的 16 kHz PCM 缓存到停止时，作为 WAV 交给 Host 的 `/local/audio/transcriptions`。实时语音凭据失败时回执带 `usageRefusal: null`，界面不会误报额度用尽。 |
 
-**Recipe 移植**（`windows/tools/port-desktop-recipes.mjs`）：由 Mac recipe 和两个平台的原版文件自动生成。逐段对齐两个平台的原文件，复制的内容全部取自 Windows 原文件，导出标识符按平台翻译，每一段都做语法结构校验。
+`windows/installer/` 用 Go 标准库将 `stub.exe`、便携 ZIP 和 32 字节尾部拼成按用户安装包。默认路径为 `%LOCALAPPDATA%\Programs\Grok Bot Local`；常规安装注册卸载项和开始菜单快捷方式，支持 `/S`、`/D=目录`。重建命令：
 
-**运行时的平台差异**：
-
-- **窗口**：沿用原版无边框窗口，用 `titleBarOverlay` 显示系统标题栏按钮（`platform.mjs`）。
-- **托盘与通知**：关闭窗口后留在通知区域；系统通知通过带 AppUserModelID 的开始菜单快捷方式投递。
-- **电脑连接**：机器 ID 为 `win-<设备ID>`，Host 显示平台 `win32`。
-- **本机命令**：
-  - 用原版的执行程序。正常启动时它用 Windows PowerShell 执行命令。
-  - 原版没有打开 PowerShell 的 UTF-8 输出选项，中文 Windows 上的输出会乱码。客户端加载执行程序时把这个原版选项打开（`local-exec.mjs` 的 `loadLocalExecDaemon`）。
-  - 从 Git Bash 里启动客户端时，原版会改用 Git Bash，`cmd /c` 这类参数会被改写，所以要从开始菜单启动。
-- **显示 Host 上的图片**：Host 记录的图片地址形如 `file:///data/...`。Windows 版按 POSIX 规则解析它（`attachments.mjs` 的 `remoteAttachmentPath`），否则图片会一直显示加载中。
-- **Codex 委派**：查找本机 `codex.exe`（包括 npm 安装的 Codex），结束时用 `taskkill /T` 终止整个进程树。
-- **不支持本机鼠标键盘控制**：原版的电脑操作组件只有 macOS 版本。
-
-**安装器**（`windows/installer/`，Go 标准库）：
-
-- 安装包结构是 `stub.exe` + 便携 zip + 32 字节尾部。
-- 按用户安装到 `%LOCALAPPDATA%\Programs\Grok Bot Local`，注册卸载项，创建开始菜单快捷方式；支持 `/S` 和 `/D=目录`。
-- 重新生成 stub：在 `windows/installer/` 执行 `go build -trimpath -ldflags="-H=windowsgui -s -w" -o ../dist/installer/grokbot-setup-stub.exe .`。
-- 重新生成 Windows 版 Tailcat：在仓库根目录执行 `python host/network/build-tailcat.py --target windows-amd64 --output windows/dist/network`（需要 Go）。
+```sh
+# 在 windows/installer/ 中重建 stub
+go build -trimpath -ldflags="-H=windowsgui -s -w" -o ../dist/installer/grokbot-setup-stub.exe .
+# 在仓库根目录重建 Windows Tailcat（需要 Go）
+python host/network/build-tailcat.py --target windows-amd64 --output windows/dist/network
+```
 
 ### Android 客户端
 
@@ -283,10 +273,13 @@ Bot 要在执行电脑或你的电脑上做有风险的操作时，原版会先�
   - 宽度 600 px 以上沿用桌面排版；对话详情在 792 px 以下是全屏层，打开大画面时让开；
   - 隐藏在 Android 上没有意义的设置（硬件加速、本机访问、Tailcat）；宽图片按列宽缩放；
 - `anchor-fallback.js`：Chromium 125 以前的 WebView 不支持 CSS 锚点定位，电脑画面会缩成 0。兼容代码记录锚点名称和位置表达式，在布局后换算成像素。
+- `compat.js`：在界面和配对页之前运行的普通脚本（ES5 语法）：
+  - 官方界面直接调用比 WebView 更新的函数，例如 `URL.canParse`（Chromium 120）、`toSorted`（110）、`Object.hasOwn`（93）、`showPopover`（114）。旧 WebView 能解析页面，但渲染时出错，React 卸载整棵树后就是白屏。`compat.js` 只补齐缺少的函数，不替换已有实现；
+  - 页面没有启动时（低于 Chromium 89，配对页用了顶层 `await`），显示 WebView 版本、错误信息和需要更新的组件，而不是白屏。
 
 **生成工具**（`android/patchers/patch.mjs`）：
 
-1. 下载并校验官方 `Grok_Bot_0.71.2_Setup.exe`（和 Windows 客户端同一个文件），解出 `app.asar`，执行 Windows recipe。
+1. 下载并校验官方 `Grok_Bot_0.71.2_Setup.exe`（Windows 客户端已改用 1.1.0），解出 `app.asar`，执行 `windows/patchers/desktop/0.71.2/` 中的 Windows recipe。
 2. 校验界面入口、`preload.cjs`、`preload-vnc.cjs` 的 SHA-256，再执行 `renderer-patches.mjs` 中的界面修改，每个文件先校验哈希、每个锚点必须唯一：
    - 放宽对话详情的窗口宽度判断（手机不能把窗口加宽）；
    - 去掉「教 Bot 做任务」和「获取手机版」两个入口；
@@ -301,7 +294,7 @@ Bot 要在执行电脑或你的电脑上做有风险的操作时，原版会先�
 
 ### iOS 客户端
 
-原版 iOS 客户端用 React Native 开发。这里写了一个注入的动态库（Objective-C，源码在 `ios/clients/ios/`，用 `build.py` 编译），把原本发往官方的请求转到你的 Host，再对 Hermes 字节码做少量固定修改。小组件、分享和通知三个扩展保留，使用独立的 Bundle ID。补丁输出未签名的 IPA，主应用和三个扩展都要自己签名（见 [ios/README.md](../ios/README.md#签名)）。
+原版 iOS 客户端用 React Native 开发。这里写了一个注入的动态库（Objective-C，源码在 `ios/clients/ios/`，用 `build.py` 编译），把原本发往官方的请求转到你的 Host，再对 Hermes 字节码做少量固定修改。小组件、分享和通知三个扩展保留，使用独立的 Bundle ID。补丁输出未签名的 IPA，主应用和三个扩展都要自己签名（见[客户端安装与签名](AI-INSTALL.md#client-packages)）。
 
 iOS 字节码补丁（`ios/recipes/ios/*.hbc.gbp.gz`）是上游作者生成的数据：补丁内容完整公开，但修改字节码的过程没有附在上游仓库里。
 
@@ -315,9 +308,12 @@ Host 可以直接给 Apple 推送服务（APNs）发通知，这需要有推送�
 
 访问 Host 可以只在局域网、用 VPN、配置 HTTPS 反向代理，最方便的是内置的 Tailcat。Tailcat 基于 Tailscale 的开源组网组件，内置在客户端、Host 和执行电脑里，复制连接链接或扫码即可连接，不需要登录 Tailscale。
 
+<a id="app-development"></a>
 ### 技能、应用、分享和协作
 
 原版的技能目录、应用市场、Bot 模板发布和多 Agent 协作都依赖官方平台。这里在 Host 上各做了一份，并尽量沿用原版界面：应用市场列表、技能发布菜单、Bot 发布卡片都是原版界面，只是数据来自你的 Host。代码应用和 Webhook 是新增的，接入了原版的工具和自动任务。
+
+开发时可用一个 `grokbot-app` JSON 声明代码、远程 MCP 或技能，在管理页导入和授权。代码应用在执行电脑上运行，沿用该用户的文件和网络权限。完整格式与 OAuth 示例在 Host 包的 `host/server/application-guide.md`；这是 Bot 写应用时读取的同一份指南。
 
 ## 目录与关键文件
 
@@ -331,10 +327,11 @@ Host 可以直接给 Apple 推送服务（APNs）发通知，这需要有推送�
 | `host/tools/host-admin.mjs` | 命令行管理工具 |
 | `host/network/` | Tailcat 的 Go 源码与构建脚本；`host/bin/` 是预编译的 Linux 版 |
 | `host/tests/` | 服务端单元测试 |
-| `mac/clients/desktop/` | 桌面客户端主进程，Mac 与 Windows 共用：连接、配对、通知、附件（`attachments.mjs`、`attachment-uploads.mjs`）、外部链接与预览、本机命令（`local-exec.mjs`）、Codex 委派；平台差异集中在 `platform.mjs`。`*-settings-extension.js` 是 recipe 加进原版设置页的代码的源码，改了要重新制作 recipe 才生效。Android 客户端也复制其中的 `i18n.mjs`、`external-url.mjs`、`connectors.mjs` |
+| `mac/clients/desktop/` | 桌面客户端主进程，Mac 与 Windows 共用：连接、配对、通知、附件（`attachments.mjs`、`attachment-uploads.mjs`）、外部链接与预览、本机命令（`local-exec.mjs`）、Codex 委派、听写（`dictation.mjs`）；平台差异集中在 `platform.mjs`。`*-settings-extension.js` 是 0.71.2 recipe 加进原版设置页的代码的源码，改了要重新制作 recipe 才生效；Windows 1.1.0 的对应源码在 `windows/tools/desktop-recipes/extensions/`。Android 客户端也复制其中的 `i18n.mjs`、`external-url.mjs`、`connectors.mjs` |
 | `mac/patchers/desktop/` | Mac 补丁、recipe 应用器、原版下载器（`download-original.mjs`），Windows 补丁也用它 |
-| `windows/patchers/desktop/` | Windows 补丁：`patch.mjs`、`original.mjs`（解压官方安装包，Android 也用）、`pe.mjs`（图标、ASAR 完整性、签名表）、`zip.mjs`、`recipes/` |
-| `windows/tools/`、`windows/installer/`、`windows/dist/` | Recipe 移植工具、安装器源码、预编译的 Tailcat 和安装器 stub |
+| `windows/patchers/desktop/` | Windows 补丁：`patch.mjs`、`original.mjs`（解压官方安装包，Android 也用）、`pe.mjs`（图标、ASAR 完整性、签名表）、`zip.mjs`、`recipes/`；`0.71.2/` 是 Android 使用的旧版输入和 recipe，`inputs.mjs` 按版本选目录 |
+| `windows/tools/desktop-recipes/` | 1.1.0 recipe 生成工具：`build.mjs`、锚点修改清单 `spec.mjs`、追加到原版模块的本项目代码 `extensions/` |
+| `windows/tools/`、`windows/installer/`、`windows/dist/` | 同版本 recipe 移植工具、安装器源码、预编译的 Tailcat 和安装器 stub |
 | `android/shell/` | Android 外壳（Kotlin）：本地网关、凭据、配对、通知、文件和返回键；`release-shell.mjs` 构建 `android/dist/grokbot-android-shell.apk` |
 | `android/client/` | WebView 里的桥接：代替 Electron 主进程和 preload、电脑画面、布局调整、锚点兼容、连接页 |
 | `android/patchers/` | Android 生成工具：`patch.mjs`、`apk.mjs`（ZIP 与 APK 签名）、`renderer-patches.mjs`、`supported.json` |
@@ -347,11 +344,20 @@ Host 可以直接给 Apple 推送服务（APNs）发通知，这需要有推送�
 
 - `host/release/platforms.py` 识别 **Docker 服务端**架构；`host/recipes/host/manifest.json` 是原版 Host、桌面和补丁的输入清单。两种架构走同一套补丁。amd64 Host 保留原版镜像基底；ARM64 用 Node 22、锁定的 ARM 原生模块和按架构编译的 Tailcat。官方桌面始终是 `linux/amd64`。
 - ARM 同机先运行隔离的小型 amd64 容器，失败时不下载大桌面。独立桌面模式跳过模拟检测，ARM Host 不下载桌面。原版镜像接受固定的清单或配置摘要；离线输入校验配置摘要及导入后的身份。
-- **分开运行已在甲骨文 Ampere A1 真机验证**：原生 ARM64 Host 连接另一台机器上的完整 amd64 桌面。通过设备配对、带上下文的两轮聊天（本地测试模型）、1280×800 VNC 画面和鼠标输入；从旧版切换到候选版后，原设备仍能读回两条回复。这验证的是 Host 运行时与数据兼容性，A1 上没有安装 Docker，也没有测试 Docker 镜像构建或 Compose 升级。
+- **历史 A1 分机验证，不是本轮真机验收**：原生 ARM64 Host 连接另一台机器上的 amd64 桌面；设备配对、带上下文的两轮聊天（本地测试模型）、1280×800 VNC 画面和鼠标输入通过。切换当时的 Host 运行时后，原设备仍能读回两条回复。A1 上未安装 Docker；这不验证本轮镜像构建、Compose 升级或两台机器的容量。
 - **同机模拟仍属实验**：Ubuntu 24.04 ARM64 虚拟服务器通过两种 `doctor` 预检，包括执行 amd64 容器；这不等于完整桌面已在单台 A1 上跑通。
 - 在 Windows 上检出或上传的代码会丢掉可执行权限，所以 `Dockerfile.base` 和 `Dockerfile.execution` 复制 Tailcat 程序后会再 `chmod 755`，Mac 补丁也会给输出里的 Tailcat 加上可执行权限。
 - Docker 发布的端口不经过 ufw。需要限制访问时，改 `GROKBOT_LISTEN_ADDRESS`，或在网络边界上限制。
 - 备份期间会暂停容器，健康检查可能短暂失败，属于正常现象。
+
+<a id="capacity-evidence"></a>
+### 容量证据如何判读
+
+首页[服务器要求](../README.md#server-requirements)的最低档（2 核 4 GB）和推荐档（4 核 8 GB）来自三类记录：2C2G 的两次限时诊断都没通过；2C4G、4C8G 两台虚拟机各自从零部署，完成了配对、附件、两轮真实模型对话、取消和重启后读回；作者的生产实例（6 核 12 线程、16 GB）运行约一周，内存峰值 Host 0.9 GB、执行桌面 1.7 GB，镜像约 13 GB。这些记录说明个人或家庭日常使用够用，但都不是多客户端重叠的持续负载测试，因此首页没有给出多人使用的配置。
+
+本轮 ARM 整机实验是在 x86_64 上模拟 ARM 客体：分机 Host 预检和测试卷往返通过，但 Host 镜像构建及核心启动检查未通过；不是物理 A1 的测试。上游提供的 Mac/iOS 补丁及过去的设备记录也不能替代本轮原生平台验收。
+
+要给出多人或更高负载的容量档位，需要同配置、同负载的基线和候选各至少三轮，每轮至少一小时真实持续负载，保留每次失败；推荐档还需多客户端重叠负载的资源余量。分机部署须同时记录 Host 与执行节点的整机数据。模型等待时间不等于 Host 耗时，`healthy`、单次构建、进程 RSS 或容器限额都不能证明容量。整机基准流程见 Host 包或完整仓库的 `host/README.md`「整机基准」（`#capacity-benchmark`）；只在获准的专用非生产虚拟机执行，不接生产服务、卷或凭据。
 
 ## 测试
 
@@ -386,25 +392,71 @@ iOS 注入库的网络层另有一项测试，要在装了 Xcode 命令行工具
 
 ## 二次开发入口
 
-两份首页的版本区块从 `ci/official-snapshot.json` 和实际补丁清单生成；从实时通道取得新版并核对产品身份后才更新快照。运行 `node ci/homepage-versions.mjs --write` 和 `node ci/homepage-versions.mjs`。这两个命令都不改补丁或签名。Android `versionName/versionCode` 从编译后的 `AndroidManifest.xml` 另验；不能用桌面界面版本代替。
-
-2026-11-14 稳定通道后来发布了 Windows x64 / macOS ARM64 **1.1.0**（构建 `83d46d618ef4c12afa17edd8e3c29d6caf046d17`）。截至核对时，[官方更新日志](https://x.ai/changelog/bot)只到 1.0.1，并没有说明 1.0.3 到 1.1.0 改了哪些功能。[官方部署说明](https://docs.x.ai/grok-bot/deployment)区分桌面 App 和厂商管理的云电脑；桌面版本不对应可获取的 Host 或执行镜像版本。对新版原包执行的只读检查为 `node ci/desktop-source-audit.mjs <windows|mac> <原包中的 app.asar> 1.1.0 <已核对的 ASAR SHA-256>`。它不执行官方代码，也不生成或发布客户端。
-
-1.1.0 实物：Windows 完整 EXE SHA-256 `01ccb10f2144ea0eb787042c54fc4b8ca2c6f43eccb7dabe5fe5eb86fa5ed044`，Anysphere Authenticode 有效；Mac 完整 DMG SHA-256 `80b718f4ba9e75d9b240675591fd5f024ecc8aa1913180c50d075fdb5a330d78`，只读解包核对内部版本与 Bundle ID，未在 Mac 验签或启动。两端各 16 个旧补丁输入：10 个路径缺失，另 6 个内容变化。完整摘要和 ASAR 摘要在仓库 `ci/official-snapshot.json`；这是观察记录，不是构建白名单。
-
-Windows 1.1.0 的[消息协议复核](../windows/tools/compat/1.1.0/README.md#windows-protocol-follow-up)确认，界面和 Plus 都使用第 3 版握手，但只有真实事件流接通后才能通知界面「在线」。共享桌面代码已修复断线通知、退出时遗留的请求，以及保存失败后旧设置被覆盖的问题。这是本项目代码的修复。Windows 1.1.0 官方安装包仍被补丁拒绝，新版原生客户端没有进行配对或聊天。官方的[私网接入](https://docs.x.ai/grok-bot/private-networks)也不是更换聊天服务器的入口。
-
-升级原版的顺序：先运行 `node ci/check-inputs.mjs` 查看当前清单。为候选原包单独制作 recipe，保持发布版固定输入不变；验证原包签名、消息格式、配对、两轮聊天、附件、重连及重启后的旧数据，成功后才更新 `supported.json` / `manifest.json`。提交前重新跑固定输入检查与四套测试；不发布原版程序。改 Host 还需在目标架构重建镜像。
-
 | 需求 | 位置 |
 | --- | --- |
 | 新增模型接口格式 | 在 `host/runtime/` 新建适配文件，实现和 `openai-chat.mjs` 相同形态的生成器，再在这些地方注册：`model-session.mjs`、`host-auto-review.mjs` 的 `CLASSIFIERS`、`host/server/models.mjs`、管理页 `host/server/public/model.js` |
 | 调整模型的思考档位 | `host/runtime/model-policy.mjs` 的 `effortLevels`；Claude 型号特性在 `anthropic-messages.mjs` |
 | 修改管理页 | `host/server/public/`，英文文案在 `locales-en.js` |
-| 修改桌面客户端 | `mac/clients/desktop/`（Mac 与 Windows 共用，Android 用到其中三个文件） |
+| 修改桌面客户端 | `mac/clients/desktop/` 由 Mac 与 Windows 共用；Android 除了复制语言、外链和连接器模块，也打包 `workspace.css` 与 `workspace-keys.cjs`。三端共用表格宽度和弹窗按键逻辑 |
 | 修改 Android 客户端 | 桥接在 `android/client/`；外壳在 `android/shell/`，改完执行 `node android/shell/release-shell.mjs` 更新预编译外壳和摘要（需要 JDK 17+ 和 Android SDK） |
-| 支持新的官方客户端版本 | 更新 `supported.json` 的哈希；Mac recipe 要重新制作，Windows recipe 用 `windows/tools/port-desktop-recipes.mjs` 移植；Android 还要更新 `android/patchers/supported.json` 和 `renderer-patches.mjs` |
-| 应用（插件）开发 | [host/README.md](../host/README.md#应用开发) |
+| 支持新的官方客户端版本 | Windows：若 Android 仍用当前输入，先把它移到 `windows/patchers/desktop/<版本>/`；更新 `supported.json`，按新原文件调整 `windows/tools/desktop-recipes/spec.mjs` 的锚点后运行 `build.mjs`，再按[桌面版本与兼容性](#desktop-compatibility)验收。Android 还需单独验证 WebView 桥接与 `renderer-patches.mjs`，再更新 `android/patchers/supported.json` |
+| 应用（插件）开发 | [应用格式与运行位置](#app-development)；完整指南随 Host 包提供 |
+
+<a id="desktop-compatibility"></a>
+### 桌面版本与兼容性
+
+Windows x64 的桌面界面固定为 **1.1.0**，Mac ARM64 和 Android 所用的桌面界面仍为 **0.71.2**；Android 外壳单独编号（[版本表](../README.md#client-versions)）。2026-11-14，[Windows](https://api2.cursor.sh/updates/api/download/stable/win32-x64-user/sand) 和 [Mac](https://api2.cursor.sh/updates/api/download/stable/darwin-arm64/sand) 通道报 **1.1.0**。[固定快照](https://github.com/ferretgeek/prokbot-plus/blob/a868918f4e2f64ab6529b3afaf92dd6019235efe/ci/official-snapshot.json)中的 `build` 是构建标识，`observedArchiveSha256` 和 `observedAsarSha256` 分别是完整 EXE/DMG 和包内 ASAR 的实算摘要，不是构建白名单。当日[官方更新日志](https://x.ai/changelog/bot)只到 **1.0.1**，未列出 1.0.3、1.1.0 的功能差异。
+
+1.0.3 的每个平台有 10 个旧 recipe 源路径消失，余下 6 个内容改变；两端的 preload 也都不同于 1.0.1。原包记录如下：
+
+| 1.0.3 原包 | 字节数 | 完整安装包 SHA-256 | 验证记录 |
+| --- | ---: | --- | --- |
+| Windows x64 EXE | 127,368,160 | `183bbc6752e80163f4eb7a729ba4326884d4554957337872509b426a1d856729` | Anysphere Authenticode 有效 |
+| Mac ARM64 DMG | 158,410,960 | `802e852fadb20308f83166ee13dd0c20d3e0978f982505353925dbd4b535bdd9` | 核对了版本与 Bundle ID，未在 Mac 验签或启动 |
+
+Windows 1.1.0 的 17 条 recipe 由 `windows/tools/desktop-recipes/` 从官方安装包生成。界面握手仍为 v3；preload 改为按边声明 RPC 方法，主进程按边注册处理器（见[Windows 客户端](#windows-客户端本版本新增)）。2026-11-16 在 Windows 11 上用补丁生成的便携版连接自部署 Host，验证了配对（含 Host 返回不同地址时拒绝配对）、两轮聊天、全局搜索、附件上传并读回、本机命令审批与执行、强制结束后重启并读回历史，以及通知判断（窗口聚焦时不提醒，最小化后送达并播放提示音）。用 0.71.2 客户端的配置目录启动 1.1.0，无需重新配对就读回了会话、所选 Bot 和面板布局。本地模拟 Host 断开全部连接、期间写入一条新回复再恢复后，客户端约 7 秒内重开事件流并重新读取对话，新回复只出现一次。听写的音频已送达 Host，但测试 Host 未配置语音识别；实时语音只用本地模拟中继验证过。Mac 的 1.1.0 原包需要自己的摘要和 recipe，尚未支持。[官方部署说明](https://docs.x.ai/grok-bot/deployment)没有从桌面版本到云 Host / 执行镜像摘要的映射；[私网接入](https://docs.x.ai/grok-bot/private-networks)也不更换聊天服务器。
+
+<a id="desktop-protocol"></a>
+#### 共享桌面协议
+
+| 边界 | 行为 |
+| --- | --- |
+| Electron preload → 主进程 | `main.mjs`、`local-services.mjs` 的 RPC 探测同时检查受信窗口的主 frame、preload 的声明和已安装的可调用处理器。核对同步启动快照、调用参数、成功/失败回执及订阅/取消订阅；仅匹配方法名不足以判定兼容。 |
+| 界面 → Host 网关 | `gateway.mjs` 每个端口只回应一次 v3 `ready`；显式版本不符就关端口。进行中的请求 ID 在端口内去重，取消只作用于该请求，端口关闭后丢弃迟到回执。取消客户端请求不会撤销 Host 已执行的命令。 |
+| 配对、事件和设置 | `connection.mjs` 加密保存设备凭据，只在原 Host origin 或原 Tailcat 隧道重试，换地址须重新配对；请求拒绝重定向。`streams.mjs` 只有在 `/events` 返回 HTTP 200、响应体和 `text/event-stream` 后才报告在线；断线通知界面，重连携带 `Last-Event-ID`，401 表示设备需要重新认证。`client-persistence.mjs` 写入失败时保留原设置。 |
+
+<a id="desktop-validation"></a>
+#### 版本核对与测试
+
+在仓库根目录运行：
+
+```sh
+node ci/check-inputs.mjs
+node ci/official-channels.mjs --online --phase planning
+node ci/official-channels.mjs --online --phase pre-release
+node ci/desktop-source-audit.mjs <windows|mac> <app.asar> 1.1.0 <asar-sha256>
+node windows/tools/desktop-recipes/build.mjs --source <Grok_Bot_1.1.0_Setup.exe> --check
+node --expose-internals windows/tools/inspect-desktop-preload.mjs <preload.cjs> <preload-sha256>
+node --test windows/tools/inspect-desktop-preload.test.mjs
+```
+
+通道只返回公开元数据。ASAR 和 preload 分别传入独立核对的 SHA-256；preload 工具只解析语法，不执行代码，可能漏报动态通道。更新快照时核对 iOS 商店和 Bundle ID；Android 用编译后的 `AndroidManifest.xml` 核对 `versionName` / `versionCode`。随后运行 `node ci/homepage-versions.mjs --write`、`node ci/homepage-versions.mjs` 更新并验证双语首页，不改正式清单。
+
+1. 按平台核对原包签名、renderer 到调用方的导入链及原生依赖；保留原版入口的 CSP 与更新策略。每条候选 recipe 绑定源与目标的 SHA-256；分别回放原版和修改后的行为，并检查错版输入被拒绝。
+2. 检查公开、未列出、团队和 Host 本地目录项的归属与链接、中英文空/加载/搜索状态、文件和聊天表格、创建 Bot 时的草稿、弹窗焦点与输入法，以及重开后仍生效的语音播放速度。Bot 资料库限单文件 20 MiB、100 个文件、合计 100 MiB，预检与显示限额应一致；聊天附件和 Bot 电脑上已有的大文件是另外两条路径。
+3. 在对应原生客户端上验证配对、拒绝和吊销、Bot 列表与历史、两轮聊天、取消、附件上传并读回、重连不重复、重启后历史仍在。通过后再更新 `supported.json` / `manifest.json`，重验固定输入并运行四套测试；Host 改动需在目标架构重建镜像。
+
+<a id="host-patch-measurement"></a>
+### Host 补丁步骤的同盘测量
+
+2026-11-13 在 WSL2 的同一 ext4 文件系统、同一 Python 和同一份固定原包与 recipe 上比较旧版与候选。候选流式校验原包、复用每份源文件的摘要，仍逐个核对输出。只改变输入文件页的冷热状态；不混入早先不同挂载盘的样本。每个版本、每种页状态各 8 次正式测量（共 32 次）；另有 2 次预热，不计入中位数。
+
+| 输入文件页 | 墙钟中位数：旧版 → 候选（秒） | 补丁子进程峰值 RSS 中位数：旧版 → 候选（KiB） |
+| --- | ---: | ---: |
+| 冷 | 5.937 → 1.269 | 97,470 → 47,268 |
+| 热 | 6.390 → 1.557 | 97,394 → 47,208 |
+
+每轮的 294 个输出路径、大小和 SHA-256 均一致；含预热的 34 轮共 9,996 项逐文件哈希核验全部通过。墙钟从 Python 进程启动到退出，包含原包校验、解包、补丁和写出，不含下载、Docker 镜像构建或模型推理。「冷」仅指指定文件页，不是整机冷启动；这些数据不能用于推断整机容量或生产性能。见[容量证据如何判读](#capacity-evidence)。
 
 ## 已知限制与待办
 
@@ -419,6 +471,6 @@ Windows 1.1.0 的[消息协议复核](../windows/tools/compat/1.1.0/README.md#wi
   - 排版照官方手机版，但页面内容是桌面版的：设置是「通用 / 电脑 / 更新」等标签页，市场的分类和内容与桌面版相同，对话页没有官方手机版右上角的电脑按钮（Bot 的电脑从对话详情打开）；
   - 后台通知靠一个前台服务保持连接，部分厂商系统需要允许后台运行；
   - 语音输入和实时通话只验证到请求送达 Host，还没有和真实的语音服务联调；
-  - 在 Android 15 模拟器（WebView 124）上做了完整测试，在 Android 16 模拟器（WebView 134）上验证了配对、通知权限和界面布局，还没有在真机上测试。
+  - 历史测试覆盖 Android 15 模拟器（WebView 124），以及 Android 16 模拟器（WebView 134）的配对、通知权限和布局。本轮在 Android 15 模拟器完成了配对、历史读回和两轮真实模型对话，但发现同文重复；修复后完整链路仍需重验。附件操作只走到系统文件选择器，不算上传成功。没有 Android 真机结果。
 - 原版桌面只有 amd64。单台 A1 同时运行 Host 和模拟桌面的完整部署与性能尚未验证。
 - iOS 需要自备砸壳 IPA 和签名证书；耳机、蓝牙与网络切换场景还没有在真机上充分验证。

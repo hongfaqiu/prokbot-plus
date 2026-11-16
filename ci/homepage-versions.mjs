@@ -23,7 +23,7 @@ export async function readVersions() {
   for (const v of [snap.windows.version, snap.mac.version, snap.ios.version, win.version, mac.version, ios.version,
     android.desktopVersion, android.shell.versionName]) assert.match(v, version);
   assert.ok(Number.isSafeInteger(android.shell.versionCode) && android.shell.versionCode > 0);
-  assert.equal(android.desktopVersion, win.version); assert.match(ios.build, /^\d+$/);
+  assert.match(ios.build, /^\d+$/);
   assert.match(host.archive.version, /^[a-f0-9]{7,40}$/);
   const box = /^grokbot-box-input:([a-f0-9]{7,40})$/.exec(host.box.localTag);
   assert.ok(box); assert.equal(host.box.platform, 'linux/amd64');
@@ -41,7 +41,7 @@ function block(text, name, body) {
 
 function windowsNotes(observed, pin, checked, zh) {
   if (observed.version === pin.version && observed.observedArchiveSha256 === pin.archive.sha256) return { badge: '', table: '' };
-  // windows/README.md and windows/tools/compat/1.1.0/README.md document this installer and patch pin.
+  // known-unsupported.json records an official installer that this patch pin was run against and rejected.
   const researched = pin.version === checked.testedAgainst.version && pin.archive?.sha256 === checked.testedAgainst.sha256
     && ['version', 'build', 'observedArchiveSha256', 'observedAsarSha256'].every(field => observed[field] === checked[field]);
   if (researched) return {
@@ -68,19 +68,19 @@ export function render(text, lang, data) {
     badge(`macOS ${label}`,`${snap.mac.version} ARM64`,`macOS ${label} ${snap.mac.version} ARM64`,'apple','111111'),
     badge(`iOS ${label}`,snap.ios.version,`iOS ${label} ${snap.ios.version}`,'apple','111111'),
     badge(zh ? '自开发 Android' : 'Unofficial Android',android.shell.versionName,`Android shell ${android.shell.versionName}`,'android','237E55')].join('\n');
-  const table = [zh ? `**安装时选哪一版？** 官方稳定通道核对日期：${snap.checkedOn}。请使用右栏的原包；左栏是厂商版本，不代表 Plus 已兼容。` :
-    `**Which version should I install?** Official channels checked on ${snap.checkedOn}. Use the input in the right column. A newer vendor release is not a Plus compatibility claim.`, '',
-    zh ? '| 平台 | 官方最新 | 本项目接受的原包 / 外壳 |' : '| Platform | Latest official release | Input accepted by Plus / shell version |',
+  const table = [zh ? `**下载哪个版本的官方安装包？** 按右栏下载，补丁只认这些版本。左栏是官方当前最新版（${snap.checkedOn} 核对），比右栏新时要等本项目适配。` :
+    `**Which official version should I download?** The one in the right column; the patches accept only those versions. The left column is the latest official release (checked ${snap.checkedOn}); when it is newer, wait until this project supports it.`, '',
+    zh ? '| 平台 | 官方最新版 | 本项目需要的版本 |' : '| Platform | Latest official | Version this project needs |',
     '| --- | --- | --- |',
     `| Windows x64 | [${snap.windows.version}](${official.win})${windowsTableNote} | ${win.version} |`,
-    `| macOS ARM64 | [${snap.mac.version}](${official.mac}) | ${mac.version}${zh ? '；无 Mac 真机测试' : '; no Mac hardware test'} |`,
-    `| iOS | [${snap.ios.version}](${official.ios}) | ${ios.version} (${ios.build})${zh ? '；无 iPhone / iPad 真机测试' : '; no iPhone or iPad hardware test'} |`,
-    zh ? `| Android 9+（自开发，非官方） | 不使用官方 Android APK | 外壳 **${android.shell.versionName}**（构建 ${android.shell.versionCode}），界面来自 Windows **${android.desktopVersion}** |` :
-      `| Android 9+ (unofficial) | Does not use the official Android APK | Shell **${android.shell.versionName}** (build ${android.shell.versionCode}), renderer from Windows **${android.desktopVersion}** |`,
-    zh ? `| Linux Host / 执行桌面 | 无可核对的最新镜像映射 | Host \`${host}\`；执行桌面 \`${box}\`（amd64） |` :
-      `| Linux Host / execution desktop | No published mapping to the latest desktop release | Host \`${host}\`; execution desktop \`${box}\` (amd64) |`, '',
-    zh ? '[ProkBot Plus 的最新发布包](https://github.com/ferretgeek/prokbot-plus/releases/latest)使用项目自己的版本号；上游 ProkBot 基线是 `3e9fe8c`。' :
-      '[Latest ProkBot Plus release](https://github.com/ferretgeek/prokbot-plus/releases/latest) uses the project’s own version number. The upstream ProkBot baseline is `3e9fe8c`.'].join('\n');
+    `| macOS ARM64 | [${snap.mac.version}](${official.mac}) | ${mac.version}${zh ? '（未在 Mac 真机上测试）' : ' (not tested on a Mac)'} |`,
+    `| iOS | [${snap.ios.version}](${official.ios}) | ${ios.version}${zh ? `（构建 ${ios.build}；未在 iPhone / iPad 上测试）` : ` (build ${ios.build}; not tested on an iPhone or iPad)`} |`,
+    zh ? `| Android 9+（自开发，非官方） | 不用官方 Android 版 | App **${android.shell.versionName}**（构建 ${android.shell.versionCode}），界面取自 Windows **${android.desktopVersion}** 安装包 |` :
+      `| Android 9+ (unofficial) | Does not use the official Android app | App **${android.shell.versionName}** (build ${android.shell.versionCode}), interface taken from the Windows **${android.desktopVersion}** installer |`,
+    zh ? `| Linux 服务端 | 不适用 | Host \`${host}\`；Bot 的电脑 \`${box}\`（x86_64） |` :
+      `| Linux server | n/a | Host \`${host}\`; Bot computer \`${box}\` (x86_64) |`, '',
+    zh ? 'ProkBot Plus 自己的版本号见[最新发布](https://github.com/ferretgeek/prokbot-plus/releases/latest)；上游 ProkBot 基线是 `3e9fe8c`。' :
+      'ProkBot Plus has its own version numbers; see the [latest release](https://github.com/ferretgeek/prokbot-plus/releases/latest). The upstream ProkBot baseline is `3e9fe8c`.'].join('\n');
   return block(block(text,'client-badges',badges),'client-versions',table);
 }
 

@@ -216,11 +216,16 @@ class NativeEndpoints(private val app: GrokBotApp, private val gateway: LocalGat
     private fun pair(body: JSONObject): JSONObject {
         val server = body.optString("server")
         val tunneled = body.optBoolean("tailcat", false)
+        val key = body.optString("key", "")
+        val password = body.optString("password", "")
+        if (key.isNotEmpty() && password.isNotEmpty()) {
+            throw PairingException(Text.t(app, "请只使用配对码或管理员密码之一。", "Provide either a pairing code or an admin password."))
+        }
         val next = if (body.optBoolean("edit")) {
             val current = gateway.connection ?: throw PairingException(Text.t(app, "尚未连接。", "Not connected."))
             Pairing.verify(app, server, current, tunneled, app.tailcat)
         } else {
-            Pairing.pair(app, server, body.optString("key"), tunneled, app.tailcat)
+            Pairing.pair(app, server, key, tunneled, app.tailcat, password = password)
         }
         if (!tunneled) app.tailcat.clear()
         app.connections.save(next)

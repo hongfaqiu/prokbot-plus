@@ -1,5 +1,5 @@
 ARG PATCH_IMAGE=grokbot-patch-base:local
-ARG RUNTIME_IMAGE
+ARG RUNTIME_IMAGE=grokbot-box-input:9d2ac1b
 FROM ${PATCH_IMAGE} AS patch
 COPY inputs/host.tgz /inputs/host.tgz
 RUN python3 release/patch-host.py --archive /inputs/host.tgz --output /generated
@@ -22,5 +22,5 @@ ENV NODE_PATH=/opt/sand/deps:/opt/grokbot/artifacts/host-${HOST_REVISION}/sand-h
     GROKBOT_TAILCAT_BINARY=/opt/grokbot/bin/grokbot-tailcat
 EXPOSE 8000
 VOLUME ["/data"]
-HEALTHCHECK --interval=15s --timeout=4s --start-period=45s --retries=3 CMD ["/exec-daemon/node", "deploy/healthcheck.mjs"]
+HEALTHCHECK --interval=15s --timeout=4s --start-period=90s --retries=3 CMD ["/exec-daemon/node", "deploy/healthcheck.mjs"]
 ENTRYPOINT ["/exec-daemon/node", "/opt/grokbot/deploy/supervisor.mjs"]

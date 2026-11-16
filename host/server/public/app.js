@@ -22,7 +22,10 @@ import { createWebhookEditor } from './webhooks.js';
 import { createSharingEditor } from './sharing.js';
 
 const aliases = { profile: 'general', notifications: 'devices', plugins: 'apps', connectors: 'apps' };
-let initialized = false, state = null, activeView = 'overview', poll = null, toastTimer, statusPending = false;
+const sessionPaths = new Set(['/admin/api/session', '/admin/api/login', '/admin/api/setup']);
+const expiredSession = () => new Error(t('会话已过期，请重新登录。'));
+let initialized = false, state = null, activeView = 'overview', poll = null, toastTimer;
+let consoleSession = null, statusPending = null;
 
 function toast(message, error = false) {
   clearTimeout(toastTimer);
@@ -33,19 +36,38 @@ function toast(message, error = false) {
   toastTimer = setTimeout(() => { element.hidden = true; }, 5000);
 }
 
-async function api(path, { method = 'GET', body } = {}) {
+async function api(path, { method = 'GET', body, signal = consoleSession?.signal, binary = false } = {}) {
+  const session = consoleSession;
+  const publicPath = sessionPaths.has(path);
+  if (!publicPath && !session) throw expiredSession();
   if (body === undefined && !['GET', 'HEAD'].includes(method)) body = {};
-  const response = await fetch(path, {
-    method, credentials: 'same-origin',
-    headers: { 'content-type': 'application/json', 'x-grokbot-csrf': '1' },
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-  });
-  const value = await response.text().then(text => (text ? JSON.parse(text) : {}));
-  if (!response.ok) {
-    if (response.status === 401 && !['/admin/api/login', '/admin/api/setup'].includes(path)) showAuth();
-    throw new Error(t(value.error) || t('请求失败 ({0})', response.status));
+  let response;
+  try {
+    response = await fetch(path, {
+      method, credentials: 'same-origin', signal,
+      headers: { 'content-type': 'application/json', 'x-grokbot-csrf': '1' },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    throw new Error(t('无法连接管理服务。'));
   }
-  return value;
+  if (response.status === 401 && !publicPath) {
+    const error = expiredSession();
+    if (session === consoleSession) showAuth(error.message);
+    throw error;
+  }
+  if (!response.ok) {
+    const value = await response.json().catch(() => null);
+    throw new Error(typeof value?.error === 'string' && value.error.trim() ? t(value.error) : t('请求失败 ({0})', response.status));
+  }
+  if (binary) return response.blob();
+  if (response.status === 204) return {};
+  try { return await response.json(); }
+  catch (error) {
+    if (signal?.aborted) throw error;
+    throw new Error(t('管理服务返回了无效响应 (HTTP {0})。', response.status));
+  }
 }
 
 const act = (control, work) => busy(control, async () => {
@@ -70,7 +92,9 @@ const loginStage = createLoginStage();
 localize(document.body);
 $('#nav-toggle').innerHTML = icon('menu');
 
-function showAuth() {
+function showAuth(message = '') {
+  consoleSession?.abort(); consoleSession = null;
+  statusPending?.abort(); statusPending = null;
   clearInterval(poll); poll = null; state = null;
   $('#console').hidden = true; $('#loading').hidden = true; $('#auth-screen').hidden = false;
   $('#auth-title').textContent = initialized ? t('登录 Host') : t('设置 Host');
@@ -82,17 +106,23 @@ function showAuth() {
   $('#auth-submit').setAttribute('aria-label', initialized ? t('登录') : t('创建管理员'));
   $('#auth-password').value = '';
   for (const view of Object.values(views)) view.reset?.();
-  loginStage.show();
+  for (const dialog of all('dialog[open]')) dialog.close();
+  loginStage.show(message);
+  if (message) $('#auth-password').focus();
 }
 
 async function showConsole() {
+  const session = consoleSession = new AbortController();
   loginStage.hide();
   $('#auth-screen').hidden = true; $('#loading').hidden = true; $('#console').hidden = false;
   $('#auth-form').reset();
+  const checking = t('正在检查');
+  setHealth(checking, ''); views.overview.statusUnavailable(checking);
   await refresh(true);
+  if (session !== consoleSession) return;
   showView(activeView);
   clearInterval(poll);
-  poll = setInterval(() => { if (!document.hidden) refresh().catch(() => {}); }, 5000);
+  poll = setInterval(() => { if (!document.hidden) refresh(); }, 5000);
 }
 
 function showView(view) {
@@ -113,22 +143,48 @@ function showView(view) {
 
 function hostTitle() {
   if (state.host.connected) return state.host.busy ? [t('任务运行中'), 'accent'] : [t('Host 就绪'), 'success'];
+  if (state.model.configured && state.host.waitingForExecutionNode) return [t('需要执行节点'), 'warn'];
   return state.model.configured ? [t('等待 Host'), 'warn'] : [t('等待配置'), 'warn'];
 }
 
+function setHealth(title, tone) {
+  $('#header-health').textContent = title;
+  $('#header-health').dataset.tone = tone;
+}
+
+function statusUnavailable(detail) {
+  state = null;
+  const title = t('状态不可用');
+  setHealth(title, 'warn'); views.overview.statusUnavailable(title, detail);
+}
+
 async function refresh(showError = false) {
-  if (statusPending) return;
-  statusPending = true;
+  if (!consoleSession || statusPending) return;
+  // Only the current probe may update health, even if an old one finishes after re-login.
+  const request = statusPending = new AbortController();
+  const timeout = setTimeout(() => request.abort(new Error(t('读取 Host 状态超时。'))), 12_000);
   try {
-    state = await api('/admin/api/status');
-    const [title, tone] = hostTitle();
-    $('#header-health').textContent = title;
-    $('#header-health').dataset.tone = tone;
+    const next = await api('/admin/api/status', { signal: request.signal });
+    if (request !== statusPending) return;
+    state = next;
+    setHealth(...hostTitle());
     for (const view of Object.values(views)) view.status?.(state, view === views[activeView]);
   } catch (error) {
+    if (request !== statusPending) return;
+    statusUnavailable(error.message);
     if (showError) toast(error.message, true);
-  } finally { statusPending = false; }
+  } finally {
+    clearTimeout(timeout);
+    if (statusPending === request) statusPending = null;
+  }
 }
+
+addEventListener('offline', () => {
+  if (!consoleSession) return;
+  statusPending?.abort(); statusPending = null;
+  statusUnavailable(t('无法连接管理服务。'));
+});
+addEventListener('online', () => { if (!document.hidden) refresh(); });
 
 $('#auth-form').addEventListener('submit', event => {
   event.preventDefault();

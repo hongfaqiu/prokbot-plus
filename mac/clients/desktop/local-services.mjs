@@ -3,6 +3,7 @@ import { createConnectorHandlers } from './connectors.mjs';
 import { externalHttpUrl } from './external-url.mjs';
 import { createLinkPreview } from './link-preview.mjs';
 import { createClientPersistence } from './client-persistence.mjs';
+import { createDictation } from './dictation.mjs';
 export const auth = {
   kind: "logged-in",
   authId: "grokbot-local-workspace",
@@ -56,16 +57,42 @@ export function probeLocalMethod(trusted, declared, call, method) {
   return { ok: Boolean(trusted), value: Boolean(trusted && declared.has(method) && call?.supports(method)) };
 }
 
-export async function createLocalServices(profile, window, { command, request, attachment, attachmentHandlers = {}, connection, disconnect, notifications, updater, pickAvatarFile, openExternal, settings = {}, appVersion, persistence = createClientPersistence(profile) }) {
+/**
+ * Methods of each RPC edge in the official preload. The minified declaration
+ * helper is renamed per build (`t()` in 0.71.2, `n()` in 1.1.0). Edges other
+ * than `main` declare their methods inline; `main` keeps everything else.
+ */
+export function desktopEdges(preload) {
+  const declared = source => [...source.matchAll(/([A-Za-z_$][\w$]*):[A-Za-z_$][\w$]*\(\)\.(?:args|noArgs)/g)].map(match => match[1]);
+  const counts = new Map();
+  for (const name of declared(preload)) counts.set(name, (counts.get(name) ?? 0) + 1);
+  const others = new Map();
+  for (const match of preload.matchAll(/\("([a-z][a-z-]*)",\{methods:\{/g)) {
+    if (match[1] === 'main') continue;
+    let end = match.index + match[0].length - 1;
+    for (let depth = 0; end < preload.length; end++) {
+      if (preload[end] === '{') depth++;
+      else if (preload[end] === '}' && --depth === 0) break;
+    }
+    const names = declared(preload.slice(match.index, end));
+    others.set(match[1], new Set(names));
+    for (const name of names) counts.set(name, counts.get(name) - 1);
+  }
+  return { main: new Set([...counts].filter(([, count]) => count > 0).map(([name]) => name)), others };
+}
+
+export async function createLocalServices(profile, window, { command, request, attachment, attachmentHandlers = {}, connection, disconnect, notifications, updater, pickAvatarFile, openExternal, settings = {}, appVersion, persistence = createClientPersistence(profile), emit = () => {} }) {
   const linkPreview = createLinkPreview({ profile });
   const known = {
     getLinkMetadata: args => linkPreview.getMetadata(args),
     resolveAttachmentMedia: attachment,
     ...attachmentHandlers,
+    // 0.71.2 sends a finished recording; 1.1.0 streams it through the dictation methods.
     transcribeAudio: ({ audio, mimeType, language }) => request('/local/audio/transcriptions', {
       audioBase64: Buffer.from(audio).toString('base64'), mimeType,
       ...(language ? { language } : {}),
     }, AbortSignal.timeout(120000)),
+    ...createDictation({ request, emit: value => emit('dictation-text', value) }),
     openSelfHostedConnection: connection,
     loginCursor: connection,
     logoutCursor: disconnect,
@@ -75,6 +102,9 @@ export async function createLocalServices(profile, window, { command, request, a
     uploadGrokBotAgentFile: ({ agentId, fileName, contentType, bytes }) => request('/local/files',
       { agentId, fileName, contentType, base64: Buffer.from(bytes).toString('base64') }, AbortSignal.timeout(60000)),
     deleteGrokBotAgentFile: async ({ agentId, name }) => { await request('/local/files', { agentId, name }, AbortSignal.timeout(15000), 'DELETE'); },
+    // 1.1.0 also lists files a cloud Bot keeps per user; Host Bots keep only their library.
+    listGrokBotUserStoreFiles: () => ({ files: [] }),
+    deleteGrokBotUserStoreFile: () => null,
     getAutoReviewInstructions: async () => (await command('getHostSettings')).autoReviewInstructions ?? { isEnabled: false, allowInstructions: [], blockInstructions: [] },
     setAutoReviewInstructions: async ({ instructions }) => {
       await command('setHostSettings', { autoReviewInstructions: instructions });
@@ -133,6 +163,7 @@ export async function createLocalServices(profile, window, { command, request, a
       isFullScreen: window.isFullScreen(),
       isFocused: window.isFocused(),
     }),
+    isWindowShown: () => window.isVisible() && !window.isMinimized(),
     minimizeWindow: () => window.minimize(),
     focusWindow: () => window.focus(),
     closeWindow: () => window.close(),
@@ -140,6 +171,8 @@ export async function createLocalServices(profile, window, { command, request, a
       window.isMaximized() ? window.unmaximize() : window.maximize(),
     ...persistence,
     getEgressTunnelEnabled: () => false,
+    getEgressTunnelForcedByAdmin: () => false,
+    claimEgressTunnel: () => null,
     getWebauthnProxyEnabled: () => true,
     getBotColorInChatEnabled: () => false,
     getEgressTunnelStatus: () => boot.egressTunnelStatus,
@@ -168,7 +201,15 @@ export async function createLocalServices(profile, window, { command, request, a
     }),
     ...createConnectorHandlers({ command, openExternal }),
     getCursorPrivacyModeEnabled: () => false,
+    getCursorStorageAllowed: () => false,
     getCursorUnifyCta: () => null,
+    // The original signed-out answers: nothing is offered and nothing is sent to a cloud account.
+    getCursorTrainingOptIn: () => "unavailable",
+    getCursorTrainingSetting: () => "signed-out",
+    getCursorBonfireStatus: () => ({ kind: "ineligible" }),
+    getLocalPitmanState: () => ({ isRecorderReady: false, session: null }),
+    getPendingRestartToUpdate: () => null,
+    getMicrosoftTeamsAccountLinkStatus: () => ({ links: [], teamEnablement: null }),
     getCurrentMachineMessagesEnabled: () => false,
     listSecrets: () => [],
     listMeetings: () => [],

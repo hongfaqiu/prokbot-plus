@@ -8,12 +8,15 @@ import { createNativeComputer } from './native-computer.mjs';
 import { startNativeProvider } from './native-provider.mjs';
 import { createCodexBridge } from './codex-bridge.mjs';
 
-// The shipped Windows daemon runs commands in Windows PowerShell without its own UTF-8 console
+// The 0.71.2 Windows daemon runs commands in Windows PowerShell without its own UTF-8 console
 // option, so output in the OEM code page (for example Chinese text) is decoded as UTF-8 and garbled.
+// 1.1.0 turns the option on in the daemon itself.
 const UTF8_CONSOLE = { from: 'new e3(i,t,t,void 0,void 0,void 0,s)', to: 'new e3(i,t,t,void 0,void 0,!0    ,s)' };
+const UTF8_BUILT_IN = '{keepBackgroundJobs:!0,powershellUtf8Console:!0,powershellUtf8ChildEnv:!0}';
 export function loadLocalExecDaemon(file, platform = process.platform) {
   if (platform !== 'win32') return createRequire(import.meta.url)(file);
   const source = readFileSync(file, 'utf8');
+  if (source.includes(UTF8_BUILT_IN)) return createRequire(import.meta.url)(file);
   if (!source.includes(UTF8_CONSOLE.from)) {
     console.warn('[local-exec] UTF-8 console option not found; command output keeps the system code page');
     return createRequire(import.meta.url)(file);

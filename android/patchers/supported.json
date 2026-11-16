@@ -2,10 +2,10 @@
   "schema": "grokbot-android-build/v1",
   "desktopVersion": "0.71.2",
   "shell": {
-    "versionName": "1.2.0",
-    "versionCode": 10200,
+    "versionName": "1.2.1",
+    "versionCode": 10201,
     "path": "android/dist/grokbot-android-shell.apk",
-    "sha256": "2420e24a38f4c509a5ebd0a5e1356e89dd1dc8fa800be76b65a8ea29c8ffeb52"
+    "sha256": "e45494ff9b7052c8fa286ec49edcd842ded09e2780b2b3bf5a9df0bbfe2d07ac"
   },
   "rendererIndexSha256": "df9cfae598a2e155700557036ab4a3da636b043a0b947df1c1dcf33ec4c193d7",
   "preloadSha256": "3126c352eb42ad28bf0892730bf765a1bca8b6ecda6b341f4d1305d7fc112db6",

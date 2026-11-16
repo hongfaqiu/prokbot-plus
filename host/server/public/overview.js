@@ -33,6 +33,7 @@ const summaries = {
 function headline(state, bots) {
   const running = bots.filter(bot => bot.isRunning).length;
   if (!state.model.configured) return [t('配置对话模型'), t('后启动 Host')];
+  if (state.host.waitingForExecutionNode) return [t('配置执行节点'), t('后启动 Host')];
   if (!state.host.connected) return [t('等待 Host'), t('启动')];
   if (running) return [t('{0} 个 Bot', running), t('正在工作')];
   return bots.length ? [t('Host 就绪'), t('{0} 个 Bot 待命', bots.length)] : [t('Host 就绪'), ''];
@@ -43,6 +44,7 @@ export function createOverview({ api, status: current }) {
   panel.innerHTML = html(`<section class="hero" aria-labelledby="hero-title">
       <div class="hero-copy">
         <h1 id="hero-title" class="hero-title"></h1>
+        <p id="hero-status-error" class="hero-usage" role="status" hidden></p>
         <p id="hero-usage" class="hero-usage"></p>
       </div>
       <div id="hero-host" class="hero-host"></div>
@@ -73,7 +75,8 @@ export function createOverview({ api, status: current }) {
   }
   function renderAttention(state) {
     const items = [];
-    if (!state.model.configured) items.push(['还没有对话模型', '填写兼容 OpenAI 的接口后，Host 才会启动。', '配置模型', 'model']);
+    if (!state.model.configured) items.push(['还没有对话模型', '配置 OpenAI Chat Completions、OpenAI Responses 或 Anthropic Messages 接口后，Host 才会启动。', '配置模型', 'model']);
+    if (state.host.waitingForExecutionNode) items.push(['需要执行节点', '分机部署需要连接独立的执行电脑，Bot 才能开始聊天。', '配置节点', 'execution']);
     if (!state.devices.some(device => !device.revokedAt)) items.push(['还没有配对设备', '用配对码连接电脑或手机客户端。', '配对设备', 'devices']);
     $('#attention').hidden = !items.length;
     $('#attention-list').replaceChildren(...items.map(([title, hint, action, view]) => {
@@ -86,10 +89,19 @@ export function createOverview({ api, status: current }) {
   }
   function render(state) {
     const bots = state.host.agents.filter(agent => !agent.isGroup);
+    $('#hero-status-error').hidden = true;
+    $('#hero-host').hidden = $('#bot-crew').hidden = $('#hero-usage').hidden = false;
     $('#hero-title').replaceChildren(...headline(state, bots).filter(Boolean).map(line => node('span', '', line)));
     crew.render(state, bots);
     renderAttention(state);
     for (const [view, [paths, summarize]] of Object.entries(summaries)) if (!paths) show(view, summarize(null, state));
+  }
+  function statusUnavailable(title, detail = '') {
+    $('#hero-title').textContent = title;
+    $('#hero-status-error').textContent = detail;
+    $('#hero-status-error').hidden = !detail;
+    $('#hero-host').hidden = $('#bot-crew').hidden = $('#hero-usage').hidden = $('#attention').hidden = true;
+    for (const [view, [paths]] of Object.entries(summaries)) if (!paths) show(view, ['—', false]);
   }
   async function loadUsage() {
     const usage = await api(`/admin/api/usage?timeZone=${encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone)}`);
@@ -106,5 +118,5 @@ export function createOverview({ api, status: current }) {
         catch { show(view, ['—', false]); }
       })]);
   }
-  return { load, status: render };
+  return { load, status: render, statusUnavailable };
 }

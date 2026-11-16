@@ -20,6 +20,8 @@ async function researchedWindows() {
   data.snap.windows = { version: '1.1.0', build: '83d46d618ef4c12afa17edd8e3c29d6caf046d17',
     observedArchiveSha256: '01ccb10f2144ea0eb787042c54fc4b8ca2c6f43eccb7dabe5fe5eb86fa5ed044',
     observedAsarSha256: 'ae8f0a14fe65f421881f96fdcb66aaaaed8b28806f79d5239dbefec9ef2ea972' };
+  data.checkedWindows = { ...data.snap.windows, archiveBytes: 127403656,
+    testedAgainst: { version: '0.71.2', sha256: data.win.archive.sha256 } };
   return data;
 }
 

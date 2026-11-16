@@ -78,10 +78,15 @@ export async function resolveDesktopUpdateConfig(args) {
   return { updateUrl, updatePublicKey };
 }
 
-const UPDATE_SETTINGS_ANCHOR =
+const UPDATE_SETTINGS_ANCHOR_0712 =
   'function re(){re.d=1588;const t=M.c(1);let e;return t[0]===Symbol.for("react.memo_cache_sentinel")?(e=o.jsx(ue,{children:o.jsx(ie,{})}),t[0]=e):e=t[0],e}';
-const UPDATE_SETTINGS_REPLACEMENT =
+const UPDATE_SETTINGS_REPLACEMENT_0712 =
   'function GrokLocalUpdateSettings(){return fe().row({loading:o.jsx(ie,{}),empty:o.jsx(ie,{}),unavailable:o.jsx(ie,{}),value:t=>t?.delivery==="in-app"?o.jsx(GrokOriginalUpdateSettings,{}):o.jsx(ie,{})})}function re(){re.d=1588;return o.jsx(ue,{children:o.jsx(GrokLocalUpdateSettings,{})})}';
+
+const UPDATE_SETTINGS_ANCHOR_110 =
+  'function O(){O.d=2763;let e=(0,y.c)(1),t;return e[0]===Symbol.for(`react.memo_cache_sentinel`)?(t=(0,S.jsx)(v,{children:(0,S.jsx)(GrokLocalVersion,{})}),e[0]=t):t=e[0],t}';
+const UPDATE_SETTINGS_REPLACEMENT_110 =
+  'function GrokLocalUpdateSettings(){return d().row({loading:(0,S.jsx)(GrokLocalVersion,{}),empty:(0,S.jsx)(GrokLocalVersion,{}),unavailable:(0,S.jsx)(GrokLocalVersion,{}),value:t=>t?.delivery==="in-app"?(0,S.jsx)(E,{}):(0,S.jsx)(GrokLocalVersion,{})})}function O(){O.d=2763;return(0,S.jsx)(v,{children:(0,S.jsx)(GrokLocalUpdateSettings,{})})}';
 
 export async function patchDesktopUpdateSettingsUi(unpacked) {
   const assetsDir = path.join(unpacked, 'dist/renderer/assets');
@@ -91,7 +96,9 @@ export async function patchDesktopUpdateSettingsUi(unpacked) {
     const filename = path.join(assetsDir, name);
     const content = await readFile(filename, 'utf8');
     if (content.includes('function GrokOriginalUpdateSettings(')) {
-      candidates.push({ name, filename, content });
+      candidates.push({ kind: '0.71.2', name, filename, content });
+    } else if (content.includes('function GrokLocalVersion(')) {
+      candidates.push({ kind: '1.1.0', name, filename, content });
     }
   }
   if (candidates.length !== 1) {
@@ -99,21 +106,32 @@ export async function patchDesktopUpdateSettingsUi(unpacked) {
       ? '未找到受支持的更新设置模块，无法恢复桌面自动更新界面。'
       : '存在多个更新设置模块，无法确定桌面自动更新界面目标。');
   }
-  const { name, filename, content } = candidates[0];
+  const { kind, name, filename, content } = candidates[0];
   if (content.includes('function GrokLocalUpdateSettings(')) {
     throw new Error(`更新设置模块已被修改：${name}`);
   }
-  if (!content.includes('fe()') || !content.includes('function ie(')) {
-    throw new Error(`更新设置模块缺少必需符号：${name}`);
+  let anchor, replacement;
+  if (kind === '0.71.2') {
+    if (!content.includes('fe()') || !content.includes('function ie(')) {
+      throw new Error(`更新设置模块缺少必需符号：${name}`);
+    }
+    anchor = UPDATE_SETTINGS_ANCHOR_0712;
+    replacement = UPDATE_SETTINGS_REPLACEMENT_0712;
+  } else {
+    if (!content.includes('d()') || !content.includes('function E(') || !content.includes('(0,S.jsx)')) {
+      throw new Error(`更新设置模块缺少必需符号：${name}`);
+    }
+    anchor = UPDATE_SETTINGS_ANCHOR_110;
+    replacement = UPDATE_SETTINGS_REPLACEMENT_110;
   }
-  const at = content.indexOf(UPDATE_SETTINGS_ANCHOR);
+  const at = content.indexOf(anchor);
   if (at < 0) {
     throw new Error(`更新设置模块缺少预期锚点：${name}`);
   }
-  if (content.indexOf(UPDATE_SETTINGS_ANCHOR, at + 1) >= 0) {
+  if (content.indexOf(anchor, at + 1) >= 0) {
     throw new Error(`更新设置模块锚点不唯一：${name}`);
   }
-  const updated = content.slice(0, at) + UPDATE_SETTINGS_REPLACEMENT + content.slice(at + UPDATE_SETTINGS_ANCHOR.length);
+  const updated = content.slice(0, at) + replacement + content.slice(at + anchor.length);
   await writeFile(filename, updated, 'utf8');
   return { file: `dist/renderer/assets/${name}` };
 }

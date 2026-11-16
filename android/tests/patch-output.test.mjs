@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkBuildOutput, writeBuildOutput } from '../patchers/output.mjs';
+import { windowsInputs } from '../../windows/patchers/desktop/inputs.mjs';
 
 const script = fileURLToPath(new URL('../patchers/patch.mjs', import.meta.url));
 const run = (...args) => promisify(execFile)(process.execPath, [script, ...args], { windowsHide: true });
@@ -46,7 +47,8 @@ test('verify-only writes nothing; a blocked manifest destination cannot replace 
     const { stdout } = await run(...args, '--verify-only');
     const { verified, shell, rendererVersion, checks } = JSON.parse(stdout);
     const android = JSON.parse(await readFile(new URL('../patchers/supported.json', import.meta.url), 'utf8'));
-    const windows = JSON.parse(await readFile(new URL('../../windows/patchers/desktop/recipes/manifest.json', import.meta.url), 'utf8'));
+    const { directory } = await windowsInputs(android.desktopVersion);
+    const windows = JSON.parse(await readFile(path.join(directory, 'recipes/manifest.json'), 'utf8'));
     assert.equal(verified, true);
     assert.deepEqual(shell, { versionName: android.shell.versionName, versionCode: android.shell.versionCode });
     assert.equal(rendererVersion, android.desktopVersion);

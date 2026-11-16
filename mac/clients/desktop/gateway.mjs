@@ -58,6 +58,14 @@ export function createGateway(config, onUnauthorized, onConnected, onStateChange
     if (method === 'resolveAgentCreation') return { kind: 'box' };
     if (method === 'restoreTemporalAgentRouting' || method === 'noteMountedAgent') return null;
     if (method === 'createAgent') { const { creationRoute, ...rest } = args; args = rest; }
+    // Desktop 1.1.0 renamed global search and pages older results; the Host answers in one page.
+    if (method === 'searchMessages' || method === 'searchFiles') {
+      const matches = await request(`/api/${method === 'searchMessages' ? 'searchAgents' : 'searchMedia'}`, { query: args.query }, signal);
+      return { matches, coverage: { kind: 'complete' } };
+    }
+    // The Host keeps no read receipts for transcripts and has no pending lessons to offer.
+    if (method === 'noteTranscriptOpened') return null;
+    if (method === 'takeTeachLearningPrompts') return [];
     return request(`/api/${encodeURIComponent(method)}`, args, signal);
   }
   function attach(port) {

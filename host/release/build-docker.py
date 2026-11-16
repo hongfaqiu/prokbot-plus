@@ -11,6 +11,7 @@ import tarfile
 import tempfile
 import time
 import urllib.request
+from bytepatch import file_digest
 from platforms import BOX as BOX_SPEC, INPUTS, check_box_execution, docker_platform
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -102,7 +103,7 @@ def main():
             archive = work / 'host.tgz'
             with urllib.request.urlopen(manifest['archive']['url'], timeout=60) as response, archive.open('wb') as target:
                 shutil.copyfileobj(response, target)
-        if hashlib.sha256(archive.read_bytes()).hexdigest() != manifest['archive']['sha256']:
+        if file_digest(archive) != manifest['archive']['sha256']:
             raise ValueError('Unsupported Host archive SHA-256')
         input_seconds = time.monotonic()-started
         run('docker', 'build', '--platform', platform, '-f', str(ROOT / 'release/Dockerfile.base'), '-t', args.base_image, str(ROOT))

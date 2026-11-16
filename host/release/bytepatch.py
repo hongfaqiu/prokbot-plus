@@ -4,6 +4,7 @@ import argparse
 import base64
 import gzip
 import hashlib
+import io
 import json
 from pathlib import Path
 
@@ -13,6 +14,14 @@ MAX_BYTES = 512 * 1024 * 1024
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def file_digest(path):
+    hasher = hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 def index_source(source, width=32, stride=16):
@@ -69,31 +78,47 @@ def create(source, target, index=None):
     return recipe
 
 
+class PatchSource:
+    """One immutable input may feed many recipes; each still checks its own pin."""
+    def __init__(self, data):
+        self._source = memoryview(bytes(data))
+        self.sha256 = digest(self._source)
+
+    def write_verified(self, recipe, stream):
+        # The caller owns an unpublished staging stream until the final digest matches.
+        source = self._source
+        if recipe.get('schema') != SCHEMA:
+            raise ValueError('Unsupported patch schema')
+        if len(source) != recipe['sourceBytes'] or self.sha256 != recipe['sourceSha256']:
+            raise ValueError('Unsupported original: SHA-256 mismatch')
+        size = recipe['targetBytes']
+        if type(size) is not int or not 0 <= size <= MAX_BYTES:
+            raise ValueError('Invalid output size')
+        written, hasher = 0, hashlib.sha256()
+        for op in recipe['ops']:
+            if op[0] == 'copy' and len(op) == 3:
+                start, length = op[1:]
+                if type(start) is not int or type(length) is not int or start < 0 or length < 1 or start + length > len(source):
+                    raise ValueError('Invalid COPY range')
+                data = source[start:start + length]
+            elif op[0] == 'add' and len(op) == 2:
+                data = base64.b64decode(op[1], validate=True)
+            else:
+                raise ValueError('Invalid patch operation')
+            written += len(data)
+            if written > size:
+                raise ValueError('Patch output overflow')
+            if stream.write(data) != len(data):
+                raise OSError('Incomplete patch output write')
+            hasher.update(data)
+        if written != size or hasher.hexdigest() != recipe['targetSha256']:
+            raise ValueError('Patch output verification failed')
+
+
 def apply(source, recipe):
-    if recipe.get('schema') != SCHEMA:
-        raise ValueError('Unsupported patch schema')
-    if len(source) != recipe['sourceBytes'] or digest(source) != recipe['sourceSha256']:
-        raise ValueError('Unsupported original: SHA-256 mismatch')
-    size = recipe['targetBytes']
-    if type(size) is not int or not 0 <= size <= MAX_BYTES:
-        raise ValueError('Invalid output size')
-    result = bytearray()
-    for op in recipe['ops']:
-        if op[0] == 'copy' and len(op) == 3:
-            start, length = op[1:]
-            if type(start) is not int or type(length) is not int or start < 0 or length < 1 or start + length > len(source):
-                raise ValueError('Invalid COPY range')
-            data = memoryview(source)[start:start + length]
-        elif op[0] == 'add' and len(op) == 2:
-            data = base64.b64decode(op[1], validate=True)
-        else:
-            raise ValueError('Invalid patch operation')
-        if len(result) + len(data) > size:
-            raise ValueError('Patch output overflow')
-        result.extend(data)
-    if len(result) != size or digest(result) != recipe['targetSha256']:
-        raise ValueError('Patch output verification failed')
-    return bytes(result)
+    result = io.BytesIO()
+    PatchSource(source).write_verified(recipe, result)
+    return result.getvalue()
 
 
 def load(path):

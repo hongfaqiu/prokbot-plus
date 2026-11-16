@@ -15,5 +15,8 @@ export async function extractNotificationPolicy(unpacked, directory) {
   if (start < 0 || end <= start || end > source.length) throw new Error('原通知判定器字节区段无效');
   const body = source.subarray(start, end);
   if (sha(body) !== policy.sha256) throw new Error('原通知判定器摘要不匹配');
-  return Buffer.concat([body, Buffer.from('\nexport { QR as NotificationDecider };\n')]);
+  // Each build renames the minified class; the 0.71.2 records predate this field.
+  const name = policy.exportName ?? 'QR';
+  if (!/^[A-Za-z_$][\w$]*$/.test(name)) throw new Error('原通知判定器导出名无效');
+  return Buffer.concat([body, Buffer.from(`\nexport { ${name} as NotificationDecider };\n`)]);
 }

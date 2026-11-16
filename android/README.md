@@ -10,10 +10,10 @@
 
 官方 Android 版（`ai.x.grok.bot` 1.16.0）带有 Google Play 的防篡改保护，改动后无法运行，绕过这种保护不在本项目的范围内。所以 Android 客户端换了一种做法：
 
-- 界面用官方**桌面版**的界面，和 Windows、Mac 客户端完全相同，取自你自己下载的官方 Windows 0.71.2 安装包；
+- 界面用官方**桌面版** 0.71.2 的界面，和 Mac 客户端相同，取自你自己下载的官方 Windows 0.71.2 安装包；
 - 外面套一个本项目编写的 Android 外壳（`shell/`），负责连接 Host、保存凭据、通知、文件和返回键等手机功能。
 
-Android 安装的是**本项目自开发的外壳** `dev.grokbot.local`：`versionName` **1.2.0**，`versionCode` **10200**。Windows 界面来源仍固定为 **0.71.2**。外壳升级不代表支持新版界面，也不会改变已安装应用的包名。
+Android 安装的是**本项目自开发的外壳** `dev.grokbot.local`：`versionName` **1.2.1**，`versionCode` **10201**。Windows 界面来源仍固定为 **0.71.2**。外壳升级不代表支持新版界面，也不会改变已安装应用的包名。
 
 ## 使用
 
@@ -23,12 +23,12 @@ Android 安装的是**本项目自开发的外壳** `dev.grokbot.local`：`versi
 node android/patchers/patch.mjs
 ```
 
-工具自动下载并校验官方 `Grok_Bot_0.71.2_Setup.exe`（和 Windows 客户端用的是同一个文件），在 `android/output/` 生成：
+工具自动下载并校验官方 `Grok_Bot_0.71.2_Setup.exe`（Windows 客户端已改用 1.1.0 安装包，两者不是同一个文件），在 `android/output/` 生成：
 
 | 输出 | 用途 |
 | --- | --- |
-| `GrokBotLocal-1.2.0-android.apk` | 安装到手机；文件名使用外壳版本 |
-| `GrokBotLocal-1.2.0-android.patch.json` | 生成记录：外壳和界面来源版本、输入文件摘要、APK 摘要、签名证书指纹 |
+| `GrokBotLocal-1.2.1-android.apk` | 安装到手机；文件名使用外壳版本 |
+| `GrokBotLocal-1.2.1-android.patch.json` | 生成记录：外壳和界面来源版本、输入文件摘要、APK 摘要、签名证书指纹 |
 
 校验报告、补丁生成记录和 APK 内的 `assets/web/client/build.json` 都用 `shell.versionName`、`shell.versionCode` 和 `rendererVersion` 代替原来含义不明确的 `version` 字段。写出产物前，工具还会按固定版本核对签名后 APK 的编译清单和内置生成记录。
 
@@ -73,13 +73,17 @@ node android/patchers/patch.mjs
 - Bot 不能在手机上执行命令，也不能操作手机。「教 Bot 做任务」（录制演示）不可用。
 - 新版 Host 在设备列表中显示 Android，并且新配对的手机不会获得桌面执行权限。旧版 Host 也能配对，但仍将手机识别为桌面设备。
 - 后台通知依靠一个常驻的前台服务保持连接，通知栏会有一条可以折叠的「保持连接」通知。部分厂商系统会限制后台运行，请在系统设置里允许本应用后台运行，或者关闭电池优化。
-- 界面运行在系统的 Android System WebView 里。WebView 125 及以上效果最好；更老的版本（部分国产系统更新较慢）也能用，Bot 电脑画面由兼容代码定位，个别装饰元素的位置可能略有不同。
+- 界面运行在系统的 Android System WebView 里，至少需要 WebView 89，111 及以上显示完整，125 及以上效果最好：
+  - 89 到 119 缺少官方界面要用的一些新函数，由兼容代码补齐；
+  - 111 以前部分颜色和布局可能与桌面版不同；
+  - 125 以前 Bot 电脑画面由兼容代码定位，个别装饰元素的位置可能略有不同；
+  - 低于 89 时（例如部分鸿蒙「卓易通」等兼容环境），应用会显示 WebView 版本和需要更新的组件，而不是白屏。请在应用商店更新「Android System WebView」或 Chrome。
 - 设备凭据用 Android Keystore 加密保存。界面通过只监听 `127.0.0.1` 的本地网关访问 Host，每次启动都会生成新的随机凭据，网页里拿不到设备令牌。
 
 ## 维护
 
 - `client/`：运行在 WebView 里的桥接代码，代替 Electron 的主进程和 preload；`patchers/renderer-patches.mjs`：对官方界面的少量修改（逐个文件校验 SHA-256，锚点必须唯一）。
-- `shell/`：Android 外壳源码（Kotlin，不依赖第三方库）。发布新版外壳时，同步修改 `shell/app/build.gradle.kts` 和 `patchers/supported.json` 的 `shell.versionName`、`shell.versionCode`。版本码须高于上一版（旧外壳随界面编号，版本码为 7102）。未经新版 Windows 输入和 recipe 验证，不改 `desktopVersion` 或界面摘要。
+- `shell/`：Android 外壳源码（Kotlin，不依赖第三方库）。发布新版外壳时，同步修改 `shell/app/build.gradle.kts` 和 `patchers/supported.json` 的 `shell.versionName`、`shell.versionCode`。版本码须高于上一版（旧外壳随界面编号，版本码为 7102）。未经新版 Windows 输入和 recipe 验证，不改 `desktopVersion` 或界面摘要。`desktopVersion` 与 Windows 客户端的版本不同时，其 Windows 输入和 recipe 在 `windows/patchers/desktop/<版本>/`（目前为 `0.71.2/`）。
 - 修改外壳后执行 `node android/shell/release-shell.mjs`。工具先核对编译后的清单，再更新 `dist/grokbot-android-shell.apk` 和摘要。需要 JDK 17+ 和 Android SDK（`ANDROID_HOME`）；已缓存 Gradle 发行包和依赖时可加 `--offline`，Gradle 只用一个 worker。
 - 测试：`node --test "android/tests/*.test.mjs"`
 

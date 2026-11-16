@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createGateway } from '../clients/desktop/gateway.mjs';
-import { createLocalServices, probeLocalMethod } from '../clients/desktop/local-services.mjs';
+import { createLocalServices, desktopEdges, probeLocalMethod } from '../clients/desktop/local-services.mjs';
 import { subscribe } from '../clients/desktop/streams.mjs';
 
 const turn = () => new Promise(resolve => setImmediate(resolve));
@@ -52,6 +52,18 @@ test('desktop IPC probes require a trusted window, a declaration and an installe
   await assert.rejects(call('toString'), /does not implement/);
 });
 
+test('desktop edges keep inline panel and Spotlight declarations out of the main edge in either minified style', () => {
+  for (const helper of ['t', 'n']) {
+    const preload = `x=ge("desktop-mount",{methods:{mount:${helper}().args({at:o({x:y()})}),notePointerRegion:${helper}().noArgs},events:te()}),`
+      + `Fc={getThemeState:${helper}().noArgs,mount:${helper}().noArgs},jc={setEnabled:${helper}().args({enabled:y()})};`
+      + `M=ge("main",{methods:{...Fc,...jc}}),S=ge("spotlight",{methods:{readSettings:${helper}().noArgs,setEnabled:${helper}().args({enabled:y()})}});`;
+    const { main, others } = desktopEdges(preload);
+    assert.deepEqual([...main].sort(), ['getThemeState', 'mount', 'setEnabled'], helper);
+    assert.deepEqual([...others].map(([edge, names]) => [edge, [...names]]),
+      [['desktop-mount', ['mount', 'notePointerRegion']], ['spotlight', ['readSettings', 'setEnabled']]], helper);
+  }
+});
+
 test('desktop coordinator deduplicates in-flight IDs per port and cancellation wins over a late success', async t => {
   const calls = delayedFetch(t);
   const gateway = createGateway(config);
@@ -74,6 +86,24 @@ test('desktop coordinator deduplicates in-flight IDs per port and cancellation w
   assert.equal(calls.length, 3, 'a settled ID does not block a later request');
   calls[2].finish(['later']); await turn();
   assert.deepEqual(first.replies[1].outcome, { status: 'ok', value: ['later'] });
+});
+
+test('1.1.0 global search uses the Host search methods and reports one complete page', async t => {
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    requests.push({ path: new URL(url).pathname, body: JSON.parse(opts.body) });
+    return Response.json([{ agentId: 'a', entryId: 'e' }]);
+  });
+  const gateway = createGateway(config);
+  t.after(() => gateway.close());
+  for (const method of ['searchMessages', 'searchFiles']) {
+    assert.deepEqual(await gateway.command(method, { query: 'q', continuation: 'ignored' }),
+      { matches: [{ agentId: 'a', entryId: 'e' }], coverage: { kind: 'complete' } });
+  }
+  assert.deepEqual(requests, [{ path: '/api/searchAgents', body: { query: 'q' } }, { path: '/api/searchMedia', body: { query: 'q' } }]);
+  assert.equal(await gateway.command('noteTranscriptOpened', { agentId: 'a' }), null);
+  assert.deepEqual(await gateway.command('takeTeachLearningPrompts'), []);
+  assert.equal(requests.length, 2);
 });
 
 test('port and gateway teardown abort outstanding commands without posting stale replies', async t => {

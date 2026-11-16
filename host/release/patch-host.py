@@ -8,7 +8,7 @@ import tarfile
 import tempfile
 import time
 import urllib.request
-from bytepatch import apply, digest, load
+from bytepatch import PatchSource, file_digest, load
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -50,7 +50,7 @@ def main():
             archive = work / 'host.tgz'
             with urllib.request.urlopen(spec['archive']['url'], timeout=60) as response, archive.open('wb') as target:
                 shutil.copyfileobj(response, target)
-        if digest(archive.read_bytes()) != spec['archive']['sha256']:
+        if file_digest(archive) != spec['archive']['sha256']:
             raise ValueError('Unsupported original Host archive: SHA-256 mismatch')
         download_seconds = time.monotonic() - started
         extract(archive, work / 'original')
@@ -65,13 +65,14 @@ def main():
             if any(p.is_absolute() or '..' in p.parts for p in (source_path, target_path)):
                 raise ValueError('Unsafe patch path')
             if record['source'] not in source_cache:
-                source_cache[record['source']] = (original / source_path).read_bytes()
-                if digest(source_cache[record['source']]) != spec['sourceSha256'][record['source']]:
+                source_cache[record['source']] = PatchSource((original / source_path).read_bytes())
+                if source_cache[record['source']].sha256 != spec['sourceSha256'][record['source']]:
                     raise ValueError('Pinned Host source digest mismatch: ' + record['source'])
             source = source_cache[record['source']]
             target = seed / target_path
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(apply(source, load(ROOT / 'recipes/host' / record['patch'])))
+            with target.open('xb') as output:
+                source.write_verified(load(ROOT / 'recipes/host' / record['patch']), output)
         args.output.mkdir(mode=0o700)
         shutil.move(str(original), str(args.output / 'original'))
         shutil.move(str(seed), str(args.output / 'seed'))

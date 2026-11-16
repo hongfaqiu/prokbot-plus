@@ -41,45 +41,85 @@ export function providerError(payload, status, headers, apiKey) {
   });
 }
 
+const MAX_ERROR_BODY_BYTES = 64 * 1024;
+
 export async function errorFromResponse(http, apiKey) {
+  if (!http.body) return providerError(undefined, http.status, http.headers, apiKey);
+  const reader = http.body.getReader();
+  let bytes, size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value.byteLength > MAX_ERROR_BODY_BYTES - size) {
+        await reader.cancel().catch(() => {});
+        return new ModelRequestError(`Model request failed (HTTP ${http.status}); error body exceeds 64 KiB`,
+          { status: http.status, retryAfterMs: retryAfterMs(http.headers) });
+      }
+      // One bounded buffer also handles arbitrarily fragmented or compressed error responses.
+      if (value.byteLength) {
+        bytes ??= Buffer.allocUnsafe(MAX_ERROR_BODY_BYTES);
+        bytes.set(value, size);
+        size += value.byteLength;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
   let payload;
-  try { payload = await http.json(); } catch { payload = undefined; }
+  if (size) {
+    try { payload = JSON.parse(new TextDecoder().decode(bytes.subarray(0, size))); }
+    catch (error) { if (!(error instanceof SyntaxError)) throw error; }
+  }
   return providerError(payload, http.status, http.headers, apiKey);
 }
 
+const direct = action => action();
+const MAX_EVENT_CHARS = 16 * 1024 * 1024;
+
 /** SSE events can cross UTF-8 chunks and use LF, CRLF, or CR line endings. */
-export async function* readSse(body) {
+export async function* readSse(body, { waitForIO = direct, maxEventChars = MAX_EVENT_CHARS } = {}) {
   if (!body) throw new ModelRequestError('Model response has no body');
   const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let pending = '', data = [];
-  function accept(line) {
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  let line = '', data = [], buffered = 0, skipLF = false;
+  function append(fragment) {
+    if (buffered + line.length + fragment.length > maxEventChars) throw new ModelRequestError('Model SSE event exceeds size limit');
+    line += fragment;
+  }
+  function accept() {
     if (line === '') {
       const event = data.length ? data.join('\n') : undefined;
-      data = [];
+      data = []; buffered = 0;
       return event;
     }
-    if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
+    if (line === 'data' || line.startsWith('data:')) {
+      data.push(line.slice(line[5] === ' ' ? 6 : 5));
+      buffered += line.length + 1;
+    }
+    line = '';
     return undefined;
   }
   try {
     while (true) {
-      const { value, done } = await reader.read();
-      pending += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      const { value, done } = await waitForIO(() => reader.read());
+      // EOF is not a blank line. In particular, never manufacture a terminal event at EOF.
+      if (done) { decoder.decode(); break; }
+      const chunk = decoder.decode(value, { stream: true });
+      if (!chunk) continue;
+      let start = skipLF && chunk[0] === '\n' ? 1 : 0;
+      skipLF = false;
+      const breaks = /\r\n|[\r\n]/g;
+      breaks.lastIndex = start;
       let match;
-      while ((match = /\r\n|\r|\n/.exec(pending))) {
-        if (!done && match[0] === '\r' && match.index === pending.length - 1) break;
-        const line = pending.slice(0, match.index);
-        pending = pending.slice(match.index + match[0].length);
-        const event = accept(line);
+      while ((match = breaks.exec(chunk))) {
+        append(chunk.slice(start, match.index));
+        start = breaks.lastIndex;
+        skipLF = start === chunk.length && match[0] === '\r';
+        const event = accept();
         if (event !== undefined) yield event;
       }
-      if (done) {
-        if (pending) accept(pending);
-        const event = accept('');
-        if (event !== undefined) yield event;
-        break;
-      }
+      append(chunk.slice(start));
     }
   } finally {
     await reader.cancel().catch(() => {});
@@ -175,8 +215,8 @@ export function reasoningOrigin(part) {
 export function rejectedOption(error, candidates) {
   if (error?.status !== 400) return undefined;
   const message = String(error.message ?? ''), param = error.param ?? '';
-  return candidates.find(name => param === name || param.startsWith(`${name}.`) || param.startsWith(`${name}[`) ||
-    new RegExp(`(^|[^\\w.])${name.replace(/[.[\]]/g, '\\$&')}(?![\\w])`).test(message));
+  if (param) return candidates.find(name => param === name || param.startsWith(`${name}.`) || param.startsWith(`${name}[`));
+  return candidates.find(name => new RegExp(`(^|[^\\w.])${name.replace(/[.[\]]/g, '\\$&')}(?![\\w])`).test(message));
 }
 
 export function deletePath(object, path) {
@@ -194,23 +234,26 @@ export function deletePath(object, path) {
 }
 
 /**
- * POST with bounded retries. Format fallbacks (replayed reasoning, inline tool images) are
- * checked first, then rejected optional parameters; both decisions persist in `state`.
+ * POST with bounded retries. Drop a named, rejected option before considering a
+ * fallback that changes conversation history (replayed reasoning or inline images).
  */
 export async function postWithFallback({ fetchImpl, url, headers, build, signal, apiKey, optional = [], state, fallbacks = [],
-  log = message => console.warn(message) }) {
+  waitForIO = direct, log = message => console.warn(message) }) {
   for (let attempt = 0; ; attempt++) {
+    signal?.throwIfAborted();
     const body = build();
     for (const name of state.dropped) deletePath(body, name);
-    const http = await fetchImpl(url, { method: 'POST', headers: typeof headers === 'function' ? headers(body) : headers,
-      body: JSON.stringify(body), signal, redirect: 'error' });
+    const http = await waitForIO(() => fetchImpl(url, { method: 'POST', headers: typeof headers === 'function' ? headers(body) : headers,
+      body: JSON.stringify(body), signal, redirect: 'error' }));
     if (http.ok) return { http, body };
-    const error = await errorFromResponse(http, apiKey);
+    const error = await waitForIO(() => errorFromResponse(http, apiKey));
+    signal?.throwIfAborted();
     if (attempt < 6) {
+      const option = rejectedOption(error, optional.filter(name => !state.dropped.has(name) &&
+        name.split('.').reduce((value, key) => value?.[key], body) !== undefined));
+      if (option) { state.dropped.add(option); log(`[model] ${new URL(url).host}: retrying without ${option}`); continue; }
       const fallback = fallbacks.find(item => !item.used && item.applies(error, body));
       if (fallback) { fallback.used = true; fallback.apply(); log(`[model] ${new URL(url).host}: ${fallback.name ?? 'fallback'} after HTTP ${error.status ?? 'error'}`); continue; }
-      const option = rejectedOption(error, optional.filter(name => !state.dropped.has(name)));
-      if (option) { state.dropped.add(option); log(`[model] ${new URL(url).host}: retrying without ${option}`); continue; }
     }
     throw error;
   }
@@ -222,21 +265,56 @@ export function replayRejected(error) {
   return error?.status === 400 && /signature|thinking|encrypted|reasoning/i.test(`${error.message ?? ''} ${error.code ?? ''}`);
 }
 
-export function serializeToolCalls(calls) {
-  // Calls are handed over together, so remember the written order of user-visible messages.
-  recordToolCallOrder(calls);
-  const parts = [];
-  for (const call of calls) {
-    // The original Harness consumes one argument stream at a time; serialize parallel calls.
-    parts.push({ type: 'tool-call-streaming-start', toolCallId: call.toolCallId, toolName: call.toolName });
-    parts.push({ type: 'tool-call-delta', toolCallId: call.toolCallId, toolName: call.toolName, argsTextDelta: JSON.stringify(call.args) });
-    parts.push(call);
+function plainUserDelivery(call) {
+  const args = call?.args;
+  if (call?.type !== 'tool-call' || call.toolName !== 'SendToUser' || args?.type !== 'text' ||
+      typeof args.content !== 'string' || !args.content || Object.keys(args).length !== 2) return undefined;
+  return args.content;
+}
+
+// A fresh provider ID does not prove fresh work. Inspect only the immediately preceding
+// successful exchange, never search across user turns, other tools or conversations.
+function isRepeatedDelivery(calls, messages) {
+  if (calls.length !== 1 || !messages || messages.length < 2) return false;
+  const text = plainUserDelivery(calls[0]);
+  if (text === undefined) return false;
+  const receipt = messages.at(-1), previous = messages.at(-2);
+  if (receipt?.role !== 'tool' || previous?.role !== 'assistant' ||
+      receipt.providerOptions?.cursor?.highLevelToolCallResult?.isError !== false) return false;
+  const parts = messageParts(receipt), sent = messageParts(previous).filter(part => part.type === 'tool-call');
+  return parts.length === 1 && sent.length === 1 && plainUserDelivery(sent[0]) === text &&
+    parts[0].type === 'tool-result' && parts[0].toolName === 'SendToUser' && !parts[0].isError &&
+    Boolean(sent[0].toolCallId) && parts[0].toolCallId === sent[0].toolCallId && receipt.id === sent[0].toolCallId;
+}
+
+export function* streamToolCalls(calls, messages) {
+  if (new Set(calls.map(call => call.toolCallId)).size !== calls.length) throw new ModelRequestError('Duplicate model tool call ID');
+  if (isRepeatedDelivery(calls, messages)) {
+    throw new ModelRequestError('The model requested the same text that was already delivered. Stopped this turn before sending it again.',
+      { code: 'repeated_user_delivery' });
   }
-  return parts;
+  const discard = recordToolCallOrder(calls);
+  let handedOff = 0;
+  try {
+    for (const call of calls) {
+      // The Harness consumes one argument stream at a time; serialize parallel calls.
+      yield { type: 'tool-call-streaming-start', toolCallId: call.toolCallId, toolName: call.toolName };
+      yield { type: 'tool-call-delta', toolCallId: call.toolCallId, toolName: call.toolName, argsTextDelta: JSON.stringify(call.args) };
+      handedOff++;
+      yield call;
+    }
+  } finally {
+    // Already delivered calls still need their ordering entries until journal execution.
+    for (let i = handedOff; i < calls.length; i++) discard(calls[i].toolCallId);
+  }
+}
+
+export function serializeToolCalls(calls) {
+  return [...streamToolCalls(calls)];
 }
 
 export function parseToolArguments(name, text) {
-  try { return JSON.parse(text || '{}'); }
+  try { return JSON.parse(text); }
   catch (cause) { throw new ModelRequestError(`Invalid tool arguments for ${name}`, { cause }); }
 }
 

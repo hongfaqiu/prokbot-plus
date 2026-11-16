@@ -30,3 +30,7 @@ button:disabled{opacity:.5}
 .subcard label{margin:12px 0 6px;font-size:14px}
 .subcard label:first-child{margin-top:0}
 .row-between{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.auth-mode{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:18px 0 4px;padding:4px;border-radius:12px;background:var(--field);border:1px solid var(--line)}
+.auth-mode button{border-radius:9px;padding:9px 12px;min-height:38px;font-size:14px;font-weight:550;background:transparent;color:var(--muted)}
+.auth-mode button.active{background:var(--button);color:var(--button-fg)}
+

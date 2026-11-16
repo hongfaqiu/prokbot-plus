@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { createEntry, readZip } from '../patchers/apk.mjs';
 import { readPinnedShell } from '../patchers/patch.mjs';
 import { checkVersionAdvance, readShellManifest, verifyClientVersions, verifyShellVersion } from '../patchers/shell-version.mjs';
+import { windowsInputs } from '../../windows/patchers/desktop/inputs.mjs';
 
 const repo = new URL('../../', import.meta.url);
 const text = name => readFile(new URL(name, repo), 'utf8');
@@ -18,7 +19,7 @@ test('Gradle and the independently pinned Windows renderer match the release met
   assert.deepEqual([...gradle.matchAll(/^\s*versionName\s*=\s*"([^"]+)"\s*$/gm)].map(m => m[1]), [versionName]);
   assert.deepEqual([...gradle.matchAll(/^\s*versionCode\s*=\s*(\d+)\s*$/gm)].map(m => Number(m[1])), [versionCode]);
   assert.ok(Number.isSafeInteger(versionCode) && versionCode > 7102, 'must upgrade the original renderer-numbered Android shell');
-  assert.equal(build.desktopVersion, JSON.parse(await text('windows/patchers/desktop/supported.json')).version);
+  assert.equal((await windowsInputs(build.desktopVersion)).supported.version, build.desktopVersion);
 });
 
 test('the bundled APK must match both the reviewed digest and the compiled Android release version', async () => {

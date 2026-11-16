@@ -2,7 +2,7 @@
 // encrypted reasoning carried in the conversation instead of on the server.
 import { createHash } from 'node:crypto';
 import { explicitEffort, fileKind, fileText, mediaUrl, messageParts, ModelRequestError, parseEvent, parseToolArguments,
-  postWithFallback, providerError, readSse, reasoningOrigin, reasoningProviderOptions, replayRejected, serializeToolCalls,
+  postWithFallback, providerError, readSse, reasoningOrigin, reasoningProviderOptions, replayRejected, streamToolCalls,
   textValue, toolSchema, unsupportedFileNote } from './model-common.mjs';
 
 export const FORMAT = 'openai-responses';
@@ -157,11 +157,11 @@ function incomplete(reason) {
 
 /** One streamed Responses turn; yields Harness stream parts, returns the assembled message. */
 export async function* responsesTurn(context) {
-  const { fetchImpl, endpoint, apiKey, headers, model, messages, tools, effort, efforts, maxTokens, signal, state,
+  const { fetchImpl, endpoint, apiKey, headers, model, messages, tools, effort, efforts, maxTokens, signal, waitForIO, state,
     notifyRequest, onModel, onId, onUsage } = context;
   const functions = convertResponsesTools(tools);
   let replayed = 0, inlineImages = false;
-  const { http } = await postWithFallback({ fetchImpl, url: endpoint, apiKey, signal, state, optional: OPTIONAL,
+  const { http } = await postWithFallback({ fetchImpl, url: endpoint, apiKey, signal, waitForIO, state, optional: OPTIONAL,
     headers: () => {
       const value = new Headers(headers);
       value.set('content-type', 'application/json');
@@ -187,17 +187,64 @@ export async function* responsesTurn(context) {
   notifyRequest(http.headers.get('x-request-id') ?? http.headers.get('request-id'));
   let id, responseModel = model, rawUsage = {}, finished = false;
   const items = new Map();
-  const item = index => {
-    if (!items.has(index)) items.set(index, { type: undefined, summary: [], reasoning: '', text: '', arguments: '', emitted: false });
-    return items.get(index);
+  const item = (index, type, id) => {
+    if (!Number.isSafeInteger(index) || index < 0) throw new ModelRequestError('Invalid model output item index');
+    if (!items.has(index)) items.set(index, { summary: [], reasoning: '', text: '', arguments: '', emitted: false });
+    const entry = items.get(index);
+    if ((type && entry.type && type !== entry.type) || (id && entry.id && id !== entry.id)) {
+      throw new ModelRequestError('Conflicting model output item identity');
+    }
+    entry.type ??= type; entry.id ??= id;
+    return entry;
   };
   const reasoningOptions = (entry, summarized) => ({
     providerOptions: reasoningProviderOptions({ format: FORMAT, model: responseModel, summarized, itemId: entry.id }) });
   const start = response => {
+    if (id && response?.id && response.id !== id) throw new ModelRequestError('Conflicting model response ID');
     if (response?.id && response.id !== id) { id = response.id; onId(id); notifyRequest(id); }
     if (response?.model) { responseModel = response.model; onModel(responseModel); }
   };
-  for await (const data of readSse(http.body)) {
+  // Both output_item.done and response.completed.output can carry the same full item.
+  // Append only previously unseen text; never replace a streamed identity or replay a signature.
+  function* finishItem(index, snapshot) {
+    if (!snapshot?.type) throw new ModelRequestError('Missing model output item');
+    const entry = item(index, snapshot.type, snapshot.id);
+    if (snapshot.status && snapshot.status !== 'completed') throw new ModelRequestError(`Model output item is ${snapshot.status}`);
+    if (entry.type === 'message') {
+      entry.phase = snapshot.phase ?? entry.phase;
+      if (!Array.isArray(snapshot.content)) return;
+      const text = snapshot.content.map(part => part.text ?? part.refusal ?? '').join('');
+      if (!text.startsWith(entry.text)) throw new ModelRequestError('Conflicting model output text');
+      const suffix = text.slice(entry.text.length);
+      entry.text = text;
+      if (suffix) yield { type: 'text-delta', textDelta: suffix };
+    } else if (entry.type === 'function_call') {
+      if ((entry.name && snapshot.name && entry.name !== snapshot.name) ||
+          (entry.callId && snapshot.call_id && entry.callId !== snapshot.call_id)) throw new ModelRequestError('Conflicting model tool call identity');
+      entry.name ??= snapshot.name; entry.callId ??= snapshot.call_id;
+      if (typeof snapshot.arguments === 'string') {
+        if (!snapshot.arguments.startsWith(entry.arguments)) throw new ModelRequestError('Conflicting model tool arguments');
+        entry.arguments = snapshot.arguments;
+      }
+    } else if (entry.type === 'reasoning') {
+      const priorSummary = entry.summary.filter(Boolean).join('\n\n'), prior = priorSummary || entry.reasoning;
+      if (snapshot.summary?.length) entry.summary = snapshot.summary.map(part => part.text ?? '');
+      if (snapshot.content?.length) entry.reasoning = snapshot.content.map(part => part.text ?? '').join('');
+      const summary = entry.summary.filter(Boolean).join('\n\n'), text = summary || entry.reasoning;
+      if (!text.startsWith(prior)) throw new ModelRequestError('Conflicting model reasoning text');
+      if (text.length > prior.length) {
+        entry.emitted = true;
+        yield { type: 'reasoning', textDelta: text.slice(prior.length), ...reasoningOptions(entry, Boolean(summary)) };
+      }
+      if (snapshot.encrypted_content && snapshot.encrypted_content !== entry.encrypted) {
+        if (entry.encrypted) throw new ModelRequestError('Conflicting model reasoning signature');
+        entry.encrypted = snapshot.encrypted_content;
+        if (entry.emitted) yield { type: 'reasoning-signature', signature: entry.encrypted };
+        else yield { type: 'redacted-reasoning', data: entry.encrypted, ...reasoningOptions(entry, true) };
+      }
+    }
+  }
+  for await (const data of readSse(http.body, { waitForIO })) {
     signal.throwIfAborted();
     if (data.trim() === '[DONE]') break;
     const event = parseEvent(data);
@@ -205,13 +252,15 @@ export async function* responsesTurn(context) {
       case 'response.created': case 'response.in_progress': case 'response.queued':
         start(event.response); break;
       case 'response.output_item.added': {
-        const entry = item(event.output_index);
-        Object.assign(entry, { type: event.item?.type, id: event.item?.id, name: event.item?.name, callId: event.item?.call_id, phase: event.item?.phase });
+        const entry = item(event.output_index, event.item?.type, event.item?.id);
+        if (entry.added) throw new ModelRequestError('Duplicate model output item');
+        Object.assign(entry, { added: true, name: event.item?.name, callId: event.item?.call_id, phase: event.item?.phase });
+        if (event.item?.arguments) entry.arguments = event.item.arguments;
         break;
       }
       case 'response.reasoning_summary_text.delta': case 'response.reasoning_text.delta': {
         if (!event.delta) break;
-        const entry = item(event.output_index), summarized = event.type === 'response.reasoning_summary_text.delta';
+        const entry = item(event.output_index, 'reasoning', event.item_id), summarized = event.type === 'response.reasoning_summary_text.delta';
         let delta = event.delta;
         if (summarized) {
           const index = event.summary_index ?? 0;
@@ -224,48 +273,39 @@ export async function* responsesTurn(context) {
       }
       case 'response.output_text.delta': case 'response.refusal.delta': {
         if (!event.delta) break;
-        const entry = item(event.output_index);
+        const entry = item(event.output_index, 'message', event.item_id);
         entry.text += event.delta;
         yield { type: 'text-delta', textDelta: event.delta };
         break;
       }
       case 'response.function_call_arguments.delta':
-        item(event.output_index).arguments += event.delta ?? '';
+        item(event.output_index, 'function_call', event.item_id).arguments += event.delta ?? '';
         break;
-      case 'response.output_item.done': {
-        const entry = item(event.output_index), done = event.item ?? {};
-        Object.assign(entry, { type: done.type ?? entry.type, id: done.id ?? entry.id });
-        if (done.type === 'reasoning') {
-          if (Array.isArray(done.summary) && done.summary.length) entry.summary = done.summary.map(part => part.text ?? '');
-          if (Array.isArray(done.content) && done.content.length && !entry.reasoning) entry.reasoning = done.content.map(part => part.text ?? '').join('');
-          entry.encrypted = done.encrypted_content ?? undefined;
-          if (entry.encrypted) {
-            // Readable reasoning carries the encrypted item as its signature; reasoning without
-            // any readable text is a redacted part, which the Harness keeps without text.
-            if (entry.emitted) yield { type: 'reasoning-signature', signature: entry.encrypted };
-            else yield { type: 'redacted-reasoning', data: entry.encrypted, ...reasoningOptions(entry, true) };
-          }
-        } else if (done.type === 'message') {
-          entry.phase = done.phase ?? entry.phase;
-          const text = (done.content ?? []).map(part => part.text ?? part.refusal ?? '').join('');
-          if (!entry.text && text) { entry.text = text; yield { type: 'text-delta', textDelta: text }; }
-        } else if (done.type === 'function_call') {
-          Object.assign(entry, { name: done.name ?? entry.name, callId: done.call_id ?? entry.callId,
-            arguments: typeof done.arguments === 'string' ? done.arguments : entry.arguments });
+      case 'response.function_call_arguments.done':
+        yield* finishItem(event.output_index, { type: 'function_call', id: event.item_id, name: event.name, arguments: event.arguments });
+        break;
+      case 'response.output_item.done':
+        yield* finishItem(event.output_index, event.item);
+        break;
+      case 'response.completed': case 'response.incomplete': case 'response.failed': case 'response.cancelled': {
+        const response = event.response;
+        if (!response) throw new ModelRequestError('Missing terminal model response');
+        start(response);
+        if (response.usage) { rawUsage = response.usage; onUsage(responsesUsage(rawUsage)); }
+        if (event.type === 'response.failed' || response.error || response.status === 'failed') {
+          throw providerError({ error: response.error ?? { message: 'Model response failed' } }, undefined, http.headers, apiKey);
         }
-        break;
-      }
-      case 'response.completed':
-        start(event.response);
-        rawUsage = event.response?.usage ?? rawUsage; onUsage(responsesUsage(rawUsage));
+        if (event.type === 'response.incomplete' || response.status === 'incomplete' || response.incomplete_details) throw incomplete(response.incomplete_details?.reason);
+        if (event.type !== 'response.completed' || (response.status && response.status !== 'completed')) throw incomplete(response.status ?? event.type);
+        if (response.output !== undefined) {
+          if (!Array.isArray(response.output) || [...items.keys()].some(index => index >= response.output.length)) {
+            throw new ModelRequestError('Model output snapshot is missing a streamed item');
+          }
+          for (const [index, output] of response.output.entries()) yield* finishItem(index, output);
+        }
         finished = true;
         break;
-      case 'response.incomplete':
-        rawUsage = event.response?.usage ?? rawUsage; onUsage(responsesUsage(rawUsage));
-        throw incomplete(event.response?.incomplete_details?.reason);
-      case 'response.failed':
-        rawUsage = event.response?.usage ?? rawUsage; onUsage(responsesUsage(rawUsage));
-        throw providerError({ error: event.response?.error ?? { message: 'Model response failed' } }, undefined, http.headers, apiKey);
+      }
       case 'error':
         throw providerError(event.error ? event : { error: event }, undefined, http.headers, apiKey);
       default:
@@ -292,6 +332,6 @@ export async function* responsesTurn(context) {
       calls.push(call); content.push(call);
     }
   }
-  yield* serializeToolCalls(calls);
+  yield* streamToolCalls(calls, messages);
   return { id, model: responseModel, content, toolCalls: calls.length, usage: responsesUsage(rawUsage) };
 }

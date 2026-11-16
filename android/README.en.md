@@ -10,10 +10,10 @@ See the [AI installation guide](../docs/AI-INSTALL.en.md#94-android-phone) for t
 
 The official Android app (`ai.x.grok.bot` 1.16.0) carries Google Play tamper protection and stops working once modified; circumventing that protection is out of scope for this project. The Android client is built differently instead:
 
-- The interface is the official **desktop** interface, the same one as in the Windows and Mac clients, taken from your own download of the official Windows 0.71.2 installer.
+- The interface is the official 0.71.2 **desktop** interface, the same one as in the Mac client, taken from your own download of the official Windows 0.71.2 installer.
 - It runs inside an Android shell written for this project (`shell/`), which connects to the Host and handles credentials, notifications, files, the back gesture and other phone features.
 
-Android installs the **project's shell**, `dev.grokbot.local`: `versionName` **1.2.0**, `versionCode` **10200**. The Windows renderer remains pinned to **0.71.2**. A shell release does not add support for a newer renderer or change the installed app's identity.
+Android installs the **project's shell**, `dev.grokbot.local`: `versionName` **1.2.1**, `versionCode` **10201**. The Windows renderer remains pinned to **0.71.2**. A shell release does not add support for a newer renderer or change the installed app's identity.
 
 ## Usage
 
@@ -23,12 +23,12 @@ From the repository root:
 node android/patchers/patch.mjs
 ```
 
-The tool downloads and verifies the official `Grok_Bot_0.71.2_Setup.exe` (the same file the Windows client uses) and writes to `android/output/`:
+The tool downloads and verifies the official `Grok_Bot_0.71.2_Setup.exe` (the Windows client now uses the 1.1.0 installer, a different file) and writes to `android/output/`:
 
 | Output | Purpose |
 | --- | --- |
-| `GrokBotLocal-1.2.0-android.apk` | Install it on the phone; the filename uses the shell version |
-| `GrokBotLocal-1.2.0-android.patch.json` | Build record: shell and renderer versions, input digests, APK digest and signing certificate fingerprint |
+| `GrokBotLocal-1.2.1-android.apk` | Install it on the phone; the filename uses the shell version |
+| `GrokBotLocal-1.2.1-android.patch.json` | Build record: shell and renderer versions, input digests, APK digest and signing certificate fingerprint |
 
 The verification report, the patch record and `assets/web/client/build.json` inside the APK use `shell.versionName`, `shell.versionCode` and `rendererVersion` instead of the old ambiguous `version` field. Before writing the outputs, the patcher checks the signed APK's compiled manifest and embedded build record against the pins.
 
@@ -73,13 +73,17 @@ The first build creates a signing key that belongs only to you (`~/.grokbot-loca
 - The Bot cannot run commands on the phone or operate it. "Teach a task" (recording a demonstration) is unavailable.
 - Updated Hosts list Android separately and do not grant desktop execution privileges to newly paired phones. Older Hosts remain compatible but classify phones as desktop clients.
 - Background notifications rely on a foreground service that keeps the connection, which shows a collapsible "keeping connected" notification. Some vendor systems restrict background apps; allow this app to run in the background or turn off battery optimization for it.
-- The interface runs in the system's Android System WebView. WebView 125 or later works best. Older versions (some vendor systems update slowly) also work: the Bot computer view is positioned by fallback code, and a few decorative elements may sit slightly differently.
+- The interface runs in the system's Android System WebView. It needs WebView 89 or later, displays fully from 111 and works best from 125:
+  - From 89 to 119, compatibility code supplies newer built-in functions that the official interface calls.
+  - Before 111, some colors and layouts may differ from the desktop app.
+  - Before 125, the Bot computer view is positioned by fallback code, and a few decorative elements may sit slightly differently.
+  - Below 89 (for example in some compatibility layers such as HarmonyOS 卓易通), the app shows the WebView version and what to update instead of a blank page. Update "Android System WebView" or Chrome from the app store.
 - The device credential is encrypted with the Android Keystore. The interface reaches the Host through a local gateway that listens only on `127.0.0.1` and uses fresh random credentials on every start, so the web page never sees the device token.
 
 ## Maintenance
 
 - `client/`: bridge code that runs in the WebView in place of Electron's main process and preload. `patchers/renderer-patches.mjs`: the few changes to the official interface (each file verified by SHA-256, every anchor must be unique).
-- `shell/`: Android shell source (Kotlin, no third-party libraries). For a new shell release, update `shell/app/build.gradle.kts` and `shell.versionName` / `shell.versionCode` in `patchers/supported.json` together. Increase the code from the previous installed version (the old renderer-numbered shell used 7102). Keep `desktopVersion` and renderer hashes unchanged unless the new Windows input and recipes have been verified.
+- `shell/`: Android shell source (Kotlin, no third-party libraries). For a new shell release, update `shell/app/build.gradle.kts` and `shell.versionName` / `shell.versionCode` in `patchers/supported.json` together. Increase the code from the previous installed version (the old renderer-numbered shell used 7102). Keep `desktopVersion` and renderer hashes unchanged unless the new Windows input and recipes have been verified. When `desktopVersion` differs from the Windows client's version, its Windows inputs and recipes are in `windows/patchers/desktop/<version>/` (currently `0.71.2/`).
 - After changing the shell, run `node android/shell/release-shell.mjs`. It checks the compiled manifest before updating `dist/grokbot-android-shell.apk` and its digest. Building needs JDK 17+ and the Android SDK (`ANDROID_HOME`); use `--offline` with a cached Gradle distribution and dependencies. Gradle runs with one worker.
 - Tests: `node --test "android/tests/*.test.mjs"`
 

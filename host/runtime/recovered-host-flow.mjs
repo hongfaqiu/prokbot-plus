@@ -1,7 +1,35 @@
 import { constructRecoveredModules } from './recovered-modules.mjs';
 
+const memoryFailureTags = new Set(['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ETIMEDOUT',
+  'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'AbortError', 'TimeoutError']);
+
+function reportMemoryFailure(error) {
+  const tag = [error?.code, error?.cause?.code, error?.name].find(value => memoryFailureTags.has(value));
+  console.warn(`[memory] Post-turn memory model request failed (${tag ?? 'model error'})`);
+}
+
+function memoryExecutor(executor) {
+  return {
+    appendMessages(messages) { executor.appendMessages(messages); return this; },
+    stream(...args) {
+      const result = executor.stream(...args);
+      // The memory collector catches fullStream failures but never reads the new
+      // completion promises created by the Host's usage middleware above the adapter.
+      void Promise.all([result.response, result.usage, result.extendedUsage]).catch(reportMemoryFailure);
+      return result;
+    },
+  };
+}
+
 export function constructRecoveredHostFlow(library, directory) {
-  return constructRecoveredModules(library.hostFlowRecoveryPlan, library.getHostFlowRecoveryBindings(), directory, 'Host flow');
+  const original = library.getHostFlowRecoveryBindings();
+  if (typeof original.runTurnMemory !== 'function') throw new TypeError('Missing Host flow dependency: runTurnMemory');
+  return constructRecoveredModules(library.hostFlowRecoveryPlan, { ...original,
+    runTurnMemory(store, progress, session, ...turnArgs) {
+      const memorySession = { getExecutor: (...args) => memoryExecutor(session.getExecutor(...args)) };
+      return original.runTurnMemory(store, progress, memorySession, ...turnArgs);
+    },
+  }, directory, 'Host flow');
 }
 
 export async function installRecoveredHostFlow(library, directory) {

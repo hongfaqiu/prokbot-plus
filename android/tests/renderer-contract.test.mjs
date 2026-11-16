@@ -9,6 +9,7 @@ import vm from 'node:vm';
 import { gunzipSync } from 'node:zlib';
 import { androidIndexHtml, preloadMethods, wrapPreload, wrapVncPreload } from '../patchers/patch.mjs';
 import { applyPinnedRendererPatch, RENDERER_PATCHES } from '../patchers/renderer-patches.mjs';
+import { windowsInputs } from '../../windows/patchers/desktop/inputs.mjs';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const json = async url => JSON.parse(await readFile(url, 'utf8'));
@@ -16,11 +17,10 @@ const client = new URL('../client/', import.meta.url);
 const desktop = new URL('../../mac/clients/desktop/', import.meta.url);
 
 test('Android input pins refer to the correct side of each Windows recipe', async () => {
-  const windows = new URL('../../windows/patchers/desktop/', import.meta.url);
-  const supported = await json(new URL('supported.json', windows));
   const android = await json(new URL('../patchers/supported.json', import.meta.url));
+  const { directory, supported } = await windowsInputs(android.desktopVersion);
+  const windows = pathToFileURL(join(directory, '/'));
   const manifest = await json(new URL('recipes/manifest.json', windows));
-  assert.equal(android.desktopVersion, supported.version);
   const inputs = [
     ['dist/renderer/index.html', 'windows-recipe', android.rendererIndexSha256],
     ['dist/electron-preload/preload.cjs', 'windows-recipe', android.preloadSha256],
@@ -86,7 +86,7 @@ test('the HTML handoff preserves other CSP directives and orders the bridge befo
     '<script src="./stock.js"></script><script type="module" crossorigin src="./assets/index-fixture.js"></script></head>';
   const patched = androidIndexHtml(html);
   assert.deepEqual([...patched.matchAll(/<script\b[^>]*\bsrc="([^"]+)"/g)].map(m => m[1]), [
-    './stock.js', '../client/boot-data.js', '../client/desktop/workspace-keys.js', '../client/bridge.js', './assets/index-fixture.js',
+    './stock.js', '../client/boot-data.js', '../client/compat.js', '../client/desktop/workspace-keys.js', '../client/bridge.js', './assets/index-fixture.js',
   ]);
   assert.equal(patched.match(/content="([^"]+)"/)[1], policy.replace(frame, frame.slice(0, -1) + ' http://127.0.0.1:*;'));
   assert.throws(() => androidIndexHtml(html.replace(frame, `${frame} ${frame}`)));

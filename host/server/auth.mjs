@@ -6,8 +6,10 @@ import {
   check,
   equal,
   hash,
+  jsonBody,
   passwordHash,
   secret,
+  sendJson,
   verifyPassword,
 } from "./security.mjs";
 
@@ -29,6 +31,7 @@ export class Auth {
     this.dataDir = dataDir;
     this.sessionMs = sessionMs;
     this.pairingMs = pairingMs;
+    this.touchWrites = new Map();
     this.store = new JsonStore(join(dataDir, "auth.json"), {
       version: 1,
       admin: null,
@@ -93,12 +96,9 @@ export class Auth {
     return token;
   }
   adminSession(token) {
-    return (
-      typeof token === "string" &&
-      this.store.value.sessions.some(
-        (item) => item.hash === hash(token) && item.expiresAt > Date.now(),
-      )
-    );
+    if (typeof token !== "string") return false;
+    const fingerprint = hash(token), now = Date.now();
+    return this.store.value.sessions.some(item => item.hash === fingerprint && item.expiresAt > now);
   }
   async logout(token) {
     await this.store.mutate((state) => {
@@ -131,7 +131,7 @@ export class Auth {
       .filter((item) => item.expiresAt > Date.now())
       .map(({ id, expiresAt }) => ({ id, expiresAt }));
   }
-  async pair({ pairingKey, deviceName, platform, clientKind }) {
+  async pair({ pairingKey, password, deviceName, platform, clientKind }) {
     check(
       typeof deviceName === "string" &&
         deviceName.trim().length > 0 &&
@@ -144,21 +144,37 @@ export class Auth {
       400,
       "设备类型应为 desktop 或 ios",
     );
+    const hasKey = pairingKey !== undefined && pairingKey !== null;
+    const hasPassword = password !== undefined && password !== null;
+    check(!(hasKey && hasPassword), 400, "请只提供配对码或管理员密码之一");
+    check(hasKey || hasPassword, 400, "请提供配对码或管理员密码");
+    if (hasPassword) {
+      check(typeof password === "string" && password.length > 0, 400, "请输入管理员密码");
+      check(this.initialized, 409, "请先设置管理员");
+      check(
+        await verifyPassword(password, this.store.value.admin),
+        401,
+        "管理员密码不正确",
+      );
+    }
     const token = secret();
     const id = randomUUID();
     await this.store.mutate((state) => {
-      const index = state.pairing.findIndex(
-        (item) =>
-          item.hash === hash(normalizeKey(pairingKey)) &&
-          item.expiresAt > Date.now(),
-      );
-      check(index >= 0, 401, "配对码无效、已使用或已过期");
+      let keyIndex = -1;
+      if (!hasPassword) {
+        keyIndex = state.pairing.findIndex(
+          (item) =>
+            item.hash === hash(normalizeKey(pairingKey)) &&
+            item.expiresAt > Date.now(),
+        );
+        check(keyIndex >= 0, 401, "配对码无效、已使用或已过期");
+      }
       check(
         state.devices.filter((item) => !item.revokedAt).length < 100,
         409,
         "设备数量已达上限，请先撤销不用的设备",
       );
-      state.pairing.splice(index, 1);
+      if (keyIndex >= 0) state.pairing.splice(keyIndex, 1);
       state.devices.push({
         id,
         name: deviceName.trim(),
@@ -173,8 +189,9 @@ export class Auth {
   }
   authenticate(token) {
     if (typeof token !== "string") return null;
+    const fingerprint = hash(token);
     const device = this.store.value.devices.find(
-      (item) => !item.revokedAt && item.hash === hash(token),
+      (item) => !item.revokedAt && item.hash === fingerprint,
     );
     return device ? publicDevice(device) : null;
   }
@@ -190,12 +207,17 @@ export class Auth {
     const device = this.device(id);
     if (!device || Date.now() - Date.parse(device.lastSeenAt ?? 0) < 60_000)
       return;
-    await this.store.mutate((state) => {
+    // One page load can request many resources before the first fsync has finished.
+    const inflight = this.touchWrites.get(id);
+    if (inflight) return inflight;
+    const pending = this.store.mutate((state) => {
       const current = state.devices.find(
         (item) => item.id === id && !item.revokedAt,
       );
       if (current) current.lastSeenAt = new Date().toISOString();
     });
+    this.touchWrites.set(id, pending);
+    try { await pending; } finally { this.touchWrites.delete(id); }
   }
   async revoke(id) {
     await this.store.mutate((state) => {
@@ -204,4 +226,21 @@ export class Auth {
       device.revokedAt ??= new Date().toISOString();
     });
   }
+}
+
+export async function handleConnectPair({ request, response, origin, auth, federation, limiter }) {
+  check(federation.role() === 'primary', 403, 'Connect to the primary Host');
+  limiter.check(`pair:${request.socket.remoteAddress}`, 6);
+  limiter.check("pair:global", 60);
+  const body = await jsonBody(request);
+  if (body.password !== undefined && body.password !== null) {
+    limiter.check(`pair-password:${request.socket.remoteAddress}`, 5);
+    limiter.check("pair-password:global", 20);
+  }
+  const result = await auth.pair(body);
+  return sendJson(response, 201, {
+    ...result,
+    gatewayUrl: origin,
+    notificationUrl: `${origin}/notifications/events`,
+  });
 }

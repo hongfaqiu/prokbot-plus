@@ -34,6 +34,23 @@ function abortError(reason) {
   return reason instanceof Error ? reason : new DOMException('Model stream was canceled', 'AbortError');
 }
 
+// Arm a deadline only while waiting for upstream I/O, never while paused at a yield.
+function ioDeadline(controller, ms) {
+  const { signal } = controller;
+  return async action => {
+    signal.throwIfAborted();
+    let onAbort;
+    const canceled = new Promise((_, reject) => {
+      onAbort = () => reject(signal.reason);
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+    const timer = setTimeout(() => controller.abort(new DOMException(`Model upstream idle for ${ms} ms`, 'TimeoutError')), ms);
+    timer.unref();
+    try { return await Promise.race([canceled, Promise.resolve().then(() => { signal.throwIfAborted(); return action(); })]); }
+    finally { clearTimeout(timer); signal.removeEventListener('abort', onAbort); }
+  };
+}
+
 /** Usage arrives normalized to OpenAI Chat fields from every format. */
 function usageValues(raw = {}, contextWindowTokens = 0) {
   const count = value => Number.isFinite(value) && value >= 0 ? value : 0;
@@ -49,21 +66,23 @@ function usageValues(raw = {}, contextWindowTokens = 0) {
 
 export function createModelSession({ baseUrl, apiKey, model, onRequestId, apiFormat = 'openai', policy,
   fetchImpl = globalThis.fetch, headers = {}, requestOptions = {}, contextWindowTokens = 0,
-  summaryThresholdTokens = 0, mapError = error => error, onUsage = async () => {}, selectRequest } = {}) {
+  summaryThresholdTokens = 0, mapError = error => error, onUsage = async () => {}, selectRequest, idleTimeoutMs = 300_000 } = {}) {
   if (typeof model !== 'string' || !model.trim() || model !== model.trim() || model.length > 256 || /[\r\n\0]/.test(model)) {
     throw new TypeError('model must be an explicitly selected, nonempty model ID');
   }
   if (typeof fetchImpl !== 'function') throw new TypeError('fetchImpl must be a function');
   if (typeof mapError !== 'function') throw new TypeError('mapError must be a function');
+  if (!Number.isInteger(idleTimeoutMs) || idleTimeoutMs < 1 || idleTimeoutMs > 2_147_483_647) {
+    throw new TypeError('idleTimeoutMs must be a positive timer interval');
+  }
   if (!Number.isSafeInteger(contextWindowTokens) || contextWindowTokens < 0) {
     throw new TypeError('contextWindowTokens must be a nonnegative integer');
   }
   const format = FORMATS[apiFormat];
   if (!format) throw new TypeError(`apiFormat must be one of ${API_FORMATS.join(', ')}`);
   const endpoint = format.endpoint(baseUrl);
-  // Per-session adaptations: optional parameters a compatible service rejected, and
-  // replayed reasoning that no longer matches this conversation.
-  const state = { dropped: new Set(), stripReasoning: false, toolImagesAsMessage: false };
+  // Adaptive routing may select models with different parameter and replay support.
+  const adaptations = new Map();
   const effortsFor = id => policy?.models?.find(entry => entry.id === id)?.efforts;
   let resolvedModelId;
   let selectedContext = { contextWindowTokens, summaryThresholdTokens };
@@ -81,24 +100,25 @@ export function createModelSession({ baseUrl, apiKey, model, onRequestId, apiFor
       const slots = Object.fromEntries(['response', 'usage', 'extendedUsage', 'providerMetadata', 'invocationId'].map(key => [key, deferred()]));
       const controller = new AbortController();
       const signal = ctx?.signal;
+      const waitForIO = ioDeadline(controller, idleTimeoutMs);
       let settled = false;
       const fail = error => {
         if (settled) return;
         settled = true;
         Object.values(slots).forEach(slot => slot.reject(error));
       };
-      const cancel = () => {
-        const error = abortError(signal?.reason);
-        controller.abort(error);
-        fail(error);
-      };
-      if (signal?.aborted) cancel();
-      else signal?.addEventListener('abort', cancel, { once: true });
       const messages = this.getMessages();
       const trackModel = this.trackModel;
       async function* produce() {
         let notified = false;
         let recordedUsage, reportedModel = model, reportedId, selectedEffort;
+        let usageWrite;
+        const recordUsage = () => {
+          if (recordedUsage) usageWrite ??= Promise.resolve().then(() =>
+            onUsage({ raw: recordedUsage, model: reportedModel, requestId: reportedId, effort: selectedEffort })
+          ).catch(error => console.error(`[usage] ${error.message}`));
+          return usageWrite;
+        };
         const notifyRequest = id => {
           if (!notified && id) {
             notified = true;
@@ -107,17 +127,19 @@ export function createModelSession({ baseUrl, apiKey, model, onRequestId, apiFor
         };
         try {
           controller.signal.throwIfAborted();
-          const selected = await selectRequest?.({ messages, signal: controller.signal });
+          const selected = selectRequest && await waitForIO(() => selectRequest({ messages, signal: controller.signal }));
           const requestContext = { contextWindowTokens: selected?.contextWindowTokens ?? contextWindowTokens,
             summaryThresholdTokens: selected?.summaryThresholdTokens ?? summaryThresholdTokens };
           if (trackModel) selectedContext = requestContext;
           const selectedModel = selected?.model ?? model;
+          if (!adaptations.has(selectedModel)) adaptations.set(selectedModel, { dropped: new Set(), stripReasoning: false, toolImagesAsMessage: false });
           reportedModel = selectedModel; selectedEffort = selected?.effort;
           const turn = yield* format.turn({ fetchImpl, endpoint, apiKey, headers, model: selectedModel, messages, tools,
             effort: selected?.effort ?? selected?.requestOptions?.reasoning_effort, efforts: effortsFor(selectedModel),
-            maxTokens: options.maxTokens, requestOptions, signal: controller.signal, state, notifyRequest,
+            maxTokens: options.maxTokens, requestOptions, signal: controller.signal, waitForIO, state: adaptations.get(selectedModel), notifyRequest,
             onModel: value => { reportedModel = value; }, onId: value => { reportedId = value; },
             onUsage: value => { recordedUsage = value; } });
+          controller.signal.throwIfAborted();
           const responseId = turn.id ?? randomUUID();
           notifyRequest(responseId);
           const timestamp = new Date();
@@ -131,31 +153,45 @@ export function createModelSession({ baseUrl, apiKey, model, onRequestId, apiFor
           slots.providerMetadata.resolve(undefined);
           slots.invocationId.resolve(invocationId ?? responseId);
           settled = true;
+          // A consumer may stop on finish without ever asking for the iterator's done step.
+          signal?.removeEventListener('abort', onAbort);
+          recordUsage();
           yield { type: 'finish', finishReason: turn.toolCalls ? 'tool-calls' : 'stop',
             usage: values.usage, response: { id: responseId, timestamp, modelId: turn.model } };
         } catch (error) {
-          const mapped = mapError(error);
+          let mapped;
+          try { mapped = controller.signal.aborted ? controller.signal.reason : mapError(error); }
+          catch (mappingError) { mapped = mappingError; }
           fail(mapped);
           throw mapped;
         } finally {
-          if (recordedUsage) {
-            try { await onUsage({ raw: recordedUsage, model: reportedModel, requestId: reportedId, effort: selectedEffort }); }
-            catch (error) { console.error(`[usage] ${error.message}`); }
-          }
-          signal?.removeEventListener('abort', cancel);
+          signal?.removeEventListener('abort', onAbort);
           if (!settled) fail(abortError());
-          controller.abort();
+          await recordUsage();
         }
       }
       const iterator = produce();
+      const cancel = error => {
+        signal?.removeEventListener('abort', onAbort);
+        if (!settled) { controller.abort(error); fail(controller.signal.reason); }
+      };
+      const onAbort = () => {
+        cancel(abortError(signal.reason));
+        // A paused consumer need not pull again to unlock the reader and record observed usage.
+        void iterator.return().catch(() => {});
+      };
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener('abort', onAbort, { once: true });
       const fullStream = {
         [Symbol.asyncIterator]() { return this; },
-        next: value => iterator.next(value),
-        return: value => { cancel(); signal?.removeEventListener('abort', cancel); return iterator.return(value); },
-        throw: error => {
-          fail(error); controller.abort(error); signal?.removeEventListener('abort', cancel);
-          return iterator.throw(error);
+        async next(value) {
+          controller.signal.throwIfAborted();
+          const step = await iterator.next(value);
+          controller.signal.throwIfAborted();
+          return step;
         },
+        return: value => { cancel(abortError()); return iterator.return(value); },
+        throw: error => { cancel(error); return iterator.throw(error); },
       };
       return { fullStream, ...Object.fromEntries(Object.entries(slots).map(([key, slot]) => [key, slot.promise])) };
     }

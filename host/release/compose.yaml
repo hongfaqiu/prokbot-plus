@@ -35,5 +35,11 @@ services:
       options: { max-size: "10m", max-file: "3" }
 volumes:
   host-data:
+    name: ${COMPOSE_PROJECT_NAME}_host-data
+    external: ${PROKBOT_EXISTING_VOLUMES:-false}
   box-home:
+    name: ${COMPOSE_PROJECT_NAME}_box-home
+    external: ${PROKBOT_EXISTING_VOLUMES:-false}
   box-workspace:
+    name: ${COMPOSE_PROJECT_NAME}_box-workspace
+    external: ${PROKBOT_EXISTING_VOLUMES:-false}

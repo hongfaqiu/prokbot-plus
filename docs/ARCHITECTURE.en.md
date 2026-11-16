@@ -41,7 +41,7 @@ Run `node ci/check-inputs.mjs` from the full repository to see the versions actu
 | Upstream Host or desktop | `host/recipes/host/manifest.json` and sibling recipes; ARM native dependencies are locked in `host/release/arm-runtime/` | Digest checks, patch generation, target image, startup with old volumes, actual chat and desktop |
 | Server feature | `host/server/` owns admin APIs, storage and pages; `host/runtime/` owns agent and model behavior | After saving a setting in the console, verify that a client conversation actually uses it |
 | Desktop or mobile update | Mac and Windows share `mac/clients/desktop/`. Android consumes the Windows extractor and recipes. iOS is independent | Each platform's `supported.json` or recipe manifest, signing and pairing. Exercise all consumers of shared code |
-| Optional capability | Prefer an app or skill when possible: [app development](../host/README.en.md#app-development). Change the runtime only for Host behavior | Install, authorize, invoke and remove the capability. Never distribute upstream programs |
+| Optional capability | Prefer an app or skill when possible: [app development](#app-development). Change the runtime only for Host behavior | Install, authorize, invoke and remove the capability. Never distribute upstream programs |
 
 ## Feature comparison
 
@@ -79,14 +79,14 @@ Upstream ProkBot also added these features, which the original doesn't have:
 
 | Feature | Description |
 | --- | --- |
-| **Apps** | One JSON file is one app. It can include code, a remote MCP server or skills. Code apps run on the execution computer. Bots can also write apps themselves with the built-in "Write an app" tool. See [App development](../host/README.en.md#app-development) |
+| **Apps** | One JSON file is one app. It can include code, a remote MCP server or skills. Code apps run on the execution computer. Bots can also write apps themselves with the built-in "Write an app" tool. See [App development](#app-development) |
 | **Webhooks** | An external system sends a signed request, and a Bot starts working on a task |
 | **Usage statistics** | How many tokens were used each day, shown in the admin page and in the iOS settings |
 | **Prompt management** | Edit the system prompt and restore the original at any time, and see the prompts and tools each role actually receives |
 | **Per-model context settings** | Set the capacity of each model and when summarization starts, separately for each model |
 | **Admin web page** | All settings are made in the browser. Supports Chinese and English, light and dark themes, and phone screens |
-| **Split deployment** | The Host and the execution computer can run on different machines; see [host/README.en.md](../host/README.en.md#separate-execution-computer) |
-| **Backup and restore** | Back up the selected project’s managed volumes and restore into unused volumes. Images, the instance `.env`, other machines and the OS are not included. Messages written after the snapshot are not covered. |
+| **Split deployment** | The Host and execution computer can run on different machines; see [split deployment](AI-INSTALL.en.md#split-host) |
+| **Backup and restore** | Archive the managed data volumes and checksum manifest for recovery into a fresh project. Docker images, the instance `.env` and the host OS are not included. See [volume backup and recovery](AI-INSTALL.en.md#volume-recovery) |
 
 ## How each part is implemented
 
@@ -150,6 +150,8 @@ The original sends model requests to an official classifier, which decides which
 - **Optional parameter fallback**: when a provider rejects an optional parameter with a 400 (for example `reasoning.summary`, `max_tokens`, `fallbacks`), the parameter is removed and the request is retried once. This is remembered for the rest of the session, and `[model] … retrying without …` is printed in the log. Replayed reasoning that is no longer valid is handled the same way.
 - **Known gateway issue**: some aggregator gateways return `native_thinking_replay_mismatch` for any request with tools when they forward Claude in the Responses format. This is a gateway problem. Use the Anthropic format for Claude.
 
+The three model adapters hand off tools only after a completed stream; premature EOF, invalid encoding, duplicate call IDs and cancellation fail the turn.
+
 ### Automatic review
 
 When the Bot wants to do something risky on the execution computer or your computer, the original first asks the official classification service. Here the model you configured decides instead, using the original classification prompt and result format (`host/runtime/host-auto-review.mjs`). All three API formats are supported.
@@ -204,6 +206,8 @@ The model layer in this project waits until the whole reply has finished, then h
 
 `host/runtime/reliability/tool-order.mjs` (new in this version) records the order in which `SendToUser` / `SendToAgent` were written in each reply, and makes each message wait until the previous one has run before it starts. Other tools still run in parallel. If the previous message never runs, it waits at most 15 seconds. On cancel, it stops waiting right away.
 
+If the previous step contained only one plain-text `SendToUser` call and the immediately following Host receipt confirms success, a new model response that requests only the exact same text stops with a non-retryable error before delivery. The original message and model usage are retained. This check does not cross user turns, remove historical rows, or infer delivery for attachments, multi-tool steps, or missing or unsuccessful receipts.
+
 ### Execution computer
 
 In the original, every user gets an official cloud computer. Here the same official Linux desktop image runs in your Docker, and the Host operates it over an authenticated connection. The execution computer can be on the same machine as the Host or on another one. When you want the Agent to operate your own computer, the client connects out to the Host, so your computer doesn't need any open ports.
@@ -217,39 +221,25 @@ The original Mac client is an Electron app. Here the original interface is kept,
 
 ### Windows client (new in this version)
 
-The official Windows client of the same version uses the same Electron interface code as the Mac version. The only differences are the build number, resource file names, module order and a few line breaks.
+`windows/patchers/desktop/patch.mjs` accepts the pinned `Grok_Bot_1.1.0_Setup.exe`; `--source` also accepts the stock installer, `app-64.7z` or an installed folder. It extracts `app-64.7z` from NSIS with Windows 11 `tar.exe` or 7-Zip on Windows 10, verifies `resources/app.asar` and replays the recipes. `--verify-only` stops here. A client build installs the shared main process, repacks the ASAR and compares the list of unpacked files such as `.node` modules. The output copy of `Grok Bot.exe` has an updated ASAR header digest and no vendor signature. Outputs include Tailcat, a portable directory and ZIP, an installer and a `*.patch.json` manifest. Given the complete official 0.71.2 installer, `known-unsupported.json` lets the tool name it as an incompatible older official release rather than a file of unknown origin.
 
-**Patch flow** (`windows/patchers/desktop/patch.mjs`):
+`windows/tools/desktop-recipes/build.mjs` generates the 1.1.0 recipes. Each edit in `spec.mjs` is anchored to text that occurs exactly once in its original file. Unchanged original bytes become copy ranges, so a recipe adds only project code (appended modules live in `extensions/`). `--check` regenerates the recipes from the official installer and compares them byte for byte with the committed files. The 0.71.2 inputs and recipes that Android still uses are in `windows/patchers/desktop/0.71.2/`; `inputs.mjs` finds the directory for a version. `windows/tools/port-desktop-recipes.mjs` produced those recipes: it aligns asset names, exported symbols and copy ranges between Mac and Windows builds **of the same version**, with copied bytes from the Windows original. It does not port across releases.
 
-1. Download `Grok_Bot_0.71.2_Setup.exe` and verify its SHA-256. You can also use `--source` to point to an installer, `app-64.7z` or an installed folder.
-2. Cut `app-64.7z` out of the NSIS installer and extract it with the `tar.exe` that comes with Windows 11 (7-Zip on Windows 10).
-3. Unpack `resources/app.asar` and replace the main process with the shared `mac/clients/desktop` code.
-4. Apply the byte patches in `recipes/`.
-5. Repack the ASAR. Files that are not packed, such as `.node` files, are compared one by one with the original.
-6. `Grok Bot.exe` embeds the SHA-256 of the ASAR header. The patch replaces this value in place and removes the official signature that this change invalidates.
-7. Add `grokbot-tailcat.exe`, then output a portable folder, a portable zip, an installer and a `*.patch.json` manifest.
+| Runtime | Windows behavior |
+| --- | --- |
+| Window, tray and notifications | `platform.mjs` uses `titleBarOverlay` for the system buttons. Closing the window leaves the app in the tray; notifications use a Start menu shortcut with an AppUserModelID. Normal startup leaves unreadable shortcuts, shortcuts targeting other apps and existing `grokbot-local:` handlers alone. Side-by-side and isolated test launches register neither; launch a side-by-side copy from its own directory. |
+| Local execution | The Host sees `win32` and `win-<device ID>`. `loadLocalExecDaemon` enables PowerShell UTF-8 output for the stock executor. Starting from Git Bash rewrites arguments such as `cmd /c`; use the Start menu for a normal install. The Mac mouse and keyboard component is not available on Windows. |
+| Images and Codex | `remoteAttachmentPath` treats Host image URLs such as `file:///data/...` as POSIX paths. Delegation uses the local `codex.exe` (including npm installs) and `taskkill /T` to stop the process tree. |
+| 1.1.0 interface | The preload declares methods on three edges, `desktop-mount`, `main` and `spotlight`; `desktopEdges` in `local-services.mjs` registers handlers per edge, and window show and hide reach the renderer as events. `gateway.mjs` maps global search (`searchMessages` / `searchFiles`) to the Host's `searchAgents` / `searchMedia`. `dictation.mjs` buffers the renderer's 16 kHz PCM until recording stops, then sends it as WAV to the Host's `/local/audio/transcriptions`. A failed real-time voice credential reply carries `usageRefusal: null`, so the renderer does not report a usage limit. |
 
-**Recipe porting** (`windows/tools/port-desktop-recipes.mjs`): the Windows recipes are generated automatically from the Mac recipes and the original files of both platforms. The original files of the two platforms are aligned segment by segment, all copied content is taken from the Windows original, exported identifiers are translated for each platform, and every segment gets a syntax structure check.
+The Go standard-library installer in `windows/installer/` consists of `stub.exe`, the portable ZIP and a 32-byte trailer. A normal per-user install under `%LOCALAPPDATA%\Programs\Grok Bot Local` registers an uninstall entry and a Start menu shortcut. It accepts `/S` and `/D=directory`. Rebuild commands:
 
-**Platform differences at runtime**:
-
-- **Window**: keeps the original frameless window and uses `titleBarOverlay` to show the system title bar buttons (`platform.mjs`).
-- **Tray and notifications**: after the window is closed, the app stays in the notification area. System notifications are delivered through a Start menu shortcut that carries an AppUserModelID.
-- **Computer connection**: the machine ID is `win-<device ID>`, and the Host shows the platform as `win32`.
-- **Local commands**:
-  - Uses the original executor. When the client is started normally, the executor runs commands with Windows PowerShell.
-  - The original doesn't turn on the UTF-8 output option for PowerShell, so output is garbled on Chinese Windows. The client turns this original option on when it loads the executor (`loadLocalExecDaemon` in `local-exec.mjs`).
-  - When the client is started from Git Bash, the original switches to Git Bash, and arguments such as `cmd /c` get rewritten. So start the client from the Start menu.
-- **Showing images from the Host**: the image addresses the Host records look like `file:///data/...`. The Windows version parses them with POSIX rules (`remoteAttachmentPath` in `attachments.mjs`). Otherwise the images would keep showing as loading.
-- **Codex delegation**: finds the local `codex.exe` (including Codex installed with npm), and ends the whole process tree with `taskkill /T` when it finishes.
-- **No local mouse and keyboard control**: the original computer-use component only exists for macOS.
-
-**Installer** (`windows/installer/`, Go standard library):
-
-- The installer is laid out as `stub.exe` + portable zip + a 32-byte trailer.
-- Installs per user to `%LOCALAPPDATA%\Programs\Grok Bot Local`, registers an uninstall entry and creates a Start menu shortcut. Supports `/S` and `/D=directory`.
-- To rebuild the stub, run this in `windows/installer/`: `go build -trimpath -ldflags="-H=windowsgui -s -w" -o ../dist/installer/grokbot-setup-stub.exe .`.
-- To rebuild Tailcat for Windows, run this from the repository root: `python host/network/build-tailcat.py --target windows-amd64 --output windows/dist/network` (needs Go).
+```sh
+# Rebuild the stub from windows/installer/
+go build -trimpath -ldflags="-H=windowsgui -s -w" -o ../dist/installer/grokbot-setup-stub.exe .
+# Rebuild Windows Tailcat from the repository root (requires Go)
+python host/network/build-tailcat.py --target windows-amd64 --output windows/dist/network
+```
 
 ### Android client
 
@@ -283,10 +273,13 @@ The official Android app (`ai.x.grok.bot` 1.16.0) is a React Native app with Goo
   - From 600 px up the desktop layout stays; below 792 px conversation details are a full-screen layer that steps aside for the large computer view.
   - Settings that mean nothing on Android (hardware acceleration, local access, Tailcat) are hidden; wide images are scaled to the column.
 - `anchor-fallback.js`: WebView builds before Chromium 125 lack CSS anchor positioning, and the computer view collapses to nothing. The fallback records anchor names and position expressions and turns them into pixels after layout.
+- `compat.js`: a classic script in ES5 syntax that runs before the interface and the pairing page.
+  - The official interface calls built-ins newer than the WebView without checking for them, for example `URL.canParse` (Chromium 120), `toSorted` (110), `Object.hasOwn` (93) and `showPopover` (114). An older WebView parses the page, rendering throws, and React unmounts the whole tree, leaving a blank page. `compat.js` only adds missing functions and never replaces existing ones.
+  - If a page does not start (below Chromium 89, because the pairing page uses top-level `await`), it shows the WebView version, the error and what to update instead of a blank page.
 
 **The builder** (`android/patchers/patch.mjs`):
 
-1. Downloads and verifies the official `Grok_Bot_0.71.2_Setup.exe` (the same file as for the Windows client), extracts `app.asar` and applies the Windows recipes.
+1. Downloads and verifies the official `Grok_Bot_0.71.2_Setup.exe` (the Windows client now uses 1.1.0), extracts `app.asar` and applies the Windows recipes in `windows/patchers/desktop/0.71.2/`.
 2. Verifies the SHA-256 of the interface entry, `preload.cjs` and `preload-vnc.cjs`, then applies the interface changes in `renderer-patches.mjs`; each file is verified by hash first and every anchor must be unique:
    - The window width check for conversation details is relaxed (a phone cannot widen its window).
    - The "Teach a task" and "Get the mobile app" entries are removed.
@@ -301,7 +294,7 @@ The official Android app (`ai.x.grok.bot` 1.16.0) is a React Native app with Goo
 
 ### iOS client
 
-The original iOS client is built with React Native. Here an injected dynamic library (Objective-C, source in `ios/clients/ios/`, compiled with `build.py`) sends the requests meant for the official service to your Host, and a few fixed changes are made to the Hermes bytecode. The three extensions (widgets, share and notifications) are kept, each with its own bundle ID. The patch outputs an unsigned IPA, and you sign the main app and all three extensions yourself (see [ios/README.en.md](../ios/README.en.md#signing)).
+The original iOS client is built with React Native. Here an injected dynamic library (Objective-C, source in `ios/clients/ios/`, compiled with `build.py`) sends the requests meant for the official service to your Host, and a few fixed changes are made to the Hermes bytecode. The three extensions (widgets, share and notifications) are kept, each with its own bundle ID. The patch outputs an unsigned IPA, and you sign the main app and all three extensions yourself (see [client installation and signing](AI-INSTALL.en.md#client-packages)).
 
 The iOS bytecode patches (`ios/recipes/ios/*.hbc.gbp.gz`) are data generated by the upstream author: the patch content is fully public, but the process used to modify the bytecode is not included in the upstream repository.
 
@@ -315,9 +308,12 @@ The Host can send notifications directly through the Apple Push Notification ser
 
 You can reach the Host only on the LAN, through a VPN, or through an HTTPS reverse proxy. The easiest option is the built-in Tailcat. Tailcat is based on Tailscale's open-source networking component and is built into the clients, the Host and the execution computer. Copy the connection link or scan the QR code to connect; no Tailscale sign-in is needed.
 
+<a id="app-development"></a>
 ### Skills, apps, sharing and collaboration
 
 In the original, the skill catalog, the app marketplace, Bot template publishing and multi-Agent collaboration all depend on the official platform. Here each one has its own version on the Host, keeping the original interface wherever possible: the app marketplace list, the skill publishing menu and the Bot publishing card are all original screens, with the data coming from your Host. Code apps and webhooks are new, and they are connected to the original tools and automated tasks.
+
+To develop an app, declare code, remote MCP or skills in a `grokbot-app` JSON package, then import and authorize it in the console. Code apps run on the execution computer with that user's file and network access. The full format and OAuth examples are in `host/server/application-guide.md` in the Host package, the same guide a Bot reads when it writes an app.
 
 ## Directory layout and key files
 
@@ -331,10 +327,11 @@ In the original, the skill catalog, the app marketplace, Bot template publishing
 | `host/tools/host-admin.mjs` | Command-line admin tool |
 | `host/network/` | Go source and build script for Tailcat; `host/bin/` holds the prebuilt Linux version |
 | `host/tests/` | Server unit tests |
-| `mac/clients/desktop/` | Desktop client main process, shared by Mac and Windows: connection, pairing, notifications, attachments (`attachments.mjs`, `attachment-uploads.mjs`), external links and previews, local commands (`local-exec.mjs`), Codex delegation. Platform differences are kept in `platform.mjs`. The `*-settings-extension.js` files are the source of the code the recipes add to the original settings pages; changes to them take effect only after the recipes are made again. The Android client also copies `i18n.mjs`, `external-url.mjs` and `connectors.mjs` from here |
+| `mac/clients/desktop/` | Desktop client main process, shared by Mac and Windows: connection, pairing, notifications, attachments (`attachments.mjs`, `attachment-uploads.mjs`), external links and previews, local commands (`local-exec.mjs`), Codex delegation, dictation (`dictation.mjs`). Platform differences are kept in `platform.mjs`. The `*-settings-extension.js` files are the source of the code the 0.71.2 recipes add to the original settings pages; changes to them take effect only after the recipes are made again. The Windows 1.1.0 equivalents are in `windows/tools/desktop-recipes/extensions/`. The Android client also copies `i18n.mjs`, `external-url.mjs` and `connectors.mjs` from here |
 | `mac/patchers/desktop/` | Mac patcher, recipe applier and original-app downloader (`download-original.mjs`). The Windows patcher uses it too |
-| `windows/patchers/desktop/` | Windows patcher: `patch.mjs`, `original.mjs` (extracting the official installer, also used by Android), `pe.mjs` (icon, ASAR integrity, signature table), `zip.mjs`, `recipes/` |
-| `windows/tools/`, `windows/installer/`, `windows/dist/` | Recipe porting tool, installer source, prebuilt Tailcat and installer stub |
+| `windows/patchers/desktop/` | Windows patcher: `patch.mjs`, `original.mjs` (extracting the official installer, also used by Android), `pe.mjs` (icon, ASAR integrity, signature table), `zip.mjs`, `recipes/`; `0.71.2/` holds the older inputs and recipes Android uses, and `inputs.mjs` picks the directory for a version |
+| `windows/tools/desktop-recipes/` | 1.1.0 recipe generator: `build.mjs`, the anchored edit list `spec.mjs`, and the project code appended to original modules in `extensions/` |
+| `windows/tools/`, `windows/installer/`, `windows/dist/` | Same-version recipe porting tool, installer source, prebuilt Tailcat and installer stub |
 | `android/shell/` | Android shell (Kotlin): local gateway, credential, pairing, notifications, files and the back gesture; `release-shell.mjs` builds `android/dist/grokbot-android-shell.apk` |
 | `android/client/` | Bridge in the WebView: replaces Electron's main process and preloads, computer view, layout adjustments, anchor fallback, connection page |
 | `android/patchers/` | Android builder: `patch.mjs`, `apk.mjs` (ZIP and APK signing), `renderer-patches.mjs`, `supported.json` |
@@ -347,11 +344,20 @@ In the original, the skill catalog, the app marketplace, Bot template publishing
 
 - `host/release/platforms.py` detects the **Docker daemon** architecture. `host/recipes/host/manifest.json` owns the Host, desktop and patch inputs. Both architectures share the patch pipeline. amd64 retains the original base; ARM64 uses Node 22, locked native modules and a matching Tailcat build. The original desktop always uses `linux/amd64`.
 - Local ARM mode probes a small isolated amd64 container before downloading the desktop. Split mode skips emulation checks and the ARM Host skips the desktop download. The pinned manifest and config digests are accepted; offline imports verify the config digest and recheck the loaded image.
-- **Split operation verified on Oracle Ampere A1 hardware:** a native ARM64 Host connected to the full amd64 desktop on a separate machine. Device pairing, a two-turn conversation retaining context (local test model), a 1280×800 VNC framebuffer and pointer input passed. After switching from the previous Host runtime to the candidate, the same paired device could read both replies. This tested the runtime and data compatibility; Docker was not installed on the A1, and neither an image build nor a Compose upgrade was exercised there.
+- **Historical A1 split test, not hardware acceptance for this round:** a native ARM64 Host connected to a separate amd64 desktop. Pairing, a two-turn context chat with a local test model, a 1280×800 VNC frame and pointer input passed. After switching the Host runtime used in that test, the same device could read both replies. Docker was not installed on the A1. This does not verify the current image build, Compose upgrade or the capacity of either machine.
 - **Single-machine emulation remains experimental:** an Ubuntu 24.04 ARM64 VM passed both `doctor` preflights, including running an amd64 container. That is not an end-to-end test of the full desktop on a single A1.
 - Code checked out or uploaded on Windows loses its executable permission. So `Dockerfile.base` and `Dockerfile.execution` run `chmod 755` after copying the Tailcat program, and the Mac patcher also makes the Tailcat in its output executable.
 - Ports published by Docker don't go through ufw. To restrict access, change `GROKBOT_LISTEN_ADDRESS`, or restrict it at the network boundary.
 - Containers are paused during a backup, so the health check may fail briefly. This is normal.
+
+<a id="capacity-evidence"></a>
+### Interpreting capacity evidence
+
+The minimum (2 cores / 4 GB) and recommended (4 cores / 8 GB) configurations under [server requirements](../README.en.md#server-requirements) come from three records: both time-bounded 2C2G diagnostics failed; separate 2C4G and 4C8G VMs each deployed from scratch and completed pairing, an attachment, two real-model turns, cancellation and readback after a restart; and the author's production instance (6 cores / 12 threads, 16 GB) ran for about a week with memory peaks of 0.9 GB for the Host and 1.7 GB for the execution desktop, with about 13 GB of images. They show enough headroom for one person or a household, but none is a sustained test with overlapping clients, so the homepage gives no configuration for many users.
+
+The ARM experiment in this round used an ARM guest emulated on x86_64: the split Host preflight and fixture volume round trip passed, but the Host image build and core startup checks did not. It was not a physical A1 test. The upstream Mac/iOS patches and historical device results are not native platform acceptance for this candidate either.
+
+A capacity rating for many users or heavier load requires at least three baseline and three candidate rounds with matching resources and workloads, each with at least an hour of real sustained load and every failure retained. A recommendation also needs headroom under overlapping client requests. Split deployments require whole-guest observations on both machines. Model wait is not Host processing time; a healthy container, one build, process RSS or a container limit cannot establish capacity. The procedure is in the Host package or full repository: `host/README.en.md`, “Whole-machine benchmarks” (`#capacity-benchmark`). Run it only in dedicated, authorized non-production VMs; never use production services, volumes or credentials.
 
 ## Tests
 
@@ -386,25 +392,71 @@ After changing code, it's a good idea to also check it for real:
 
 ## Where to start for further development
 
-Both README version blocks are generated from `ci/official-snapshot.json` and the actual build pins. Update the snapshot only after checking the live feeds and product identity, then run `node ci/homepage-versions.mjs --write` and `node ci/homepage-versions.mjs`. Neither command changes a patch or signature. Android's app name and code are independently checked in the compiled `AndroidManifest.xml`; its renderer version is not its app version.
-
-Later on November 14, 2026 the Windows x64 and macOS ARM64 feeds published **1.1.0** (build `83d46d618ef4c12afa17edd8e3c29d6caf046d17`). The [public changelog](https://x.ai/changelog/bot) still stopped at 1.0.1 and did not attribute any feature changes to 1.0.3 or 1.1.0. The [vendor deployment guide](https://docs.x.ai/grok-bot/deployment) distinguishes the desktop app from the vendor-managed hosted computer; there is no published mapping to a self-hosted Host or execution image. Run the read-only input check as `node ci/desktop-source-audit.mjs <windows|mac> <stock app.asar> 1.1.0 <verified ASAR SHA-256>`. It neither executes vendor code nor builds or distributes a client.
-
-Observed 1.1.0 originals: Windows full EXE SHA-256 `01ccb10f2144ea0eb787042c54fc4b8ca2c6f43eccb7dabe5fe5eb86fa5ed044` (valid Anysphere Authenticode); Mac full DMG SHA-256 `80b718f4ba9e75d9b240675591fd5f024ecc8aa1913180c50d075fdb5a330d78` (read-only internal version and bundle ID check; no Mac signature check or launch). Of 16 old recipe inputs per platform, 10 paths disappeared and the other 6 changed. The repository snapshot records both original and ASAR hashes as observations, not accepted build inputs.
-
-The [Windows 1.1.0 protocol check](../windows/tools/compat/1.1.0/README.md#windows-protocol-follow-up) found that the renderer and Plus both negotiate version 3; the renderer must only be told it is online once the event stream actually opens. Shared desktop fixes cover disconnect notifications, pending requests after window teardown, and preserving prior settings when a save fails. These are project-code fixes. The official Windows 1.1.0 installer is still rejected by the patcher; native pairing and chat on that version were not tested. [Private-network routing](https://docs.x.ai/grok-bot/private-networks) is not a conversation-server selector.
-
-For an upstream update, run `node ci/check-inputs.mjs` to see the production pins. Stage candidate recipes separately. Verify the original signature, wire format, pairing, two chat turns, attachments, reconnect, and existing data after restart before promoting `supported.json` or `manifest.json`. Rerun the fixed-input check and all four suites before committing. Never distribute upstream programs. Host changes require an image rebuild on the target architecture.
-
 | Task | Where |
 | --- | --- |
 | Add a new model API format | Create an adapter file in `host/runtime/` that implements a generator with the same shape as `openai-chat.mjs`, then register it in these places: `model-session.mjs`, `CLASSIFIERS` in `host-auto-review.mjs`, `host/server/models.mjs`, and the admin page `host/server/public/model.js` |
 | Adjust the thinking levels of a model | `effortLevels` in `host/runtime/model-policy.mjs`. Claude model features are in `anthropic-messages.mjs` |
 | Change the admin page | `host/server/public/`. English strings are in `locales-en.js` |
-| Change the desktop client | `mac/clients/desktop/` (shared by Mac and Windows; Android uses three of its files) |
+| Change the desktop client | `mac/clients/desktop/` is shared by Mac and Windows. Android packages `workspace.css` and `workspace-keys.cjs` along with the language, external-link and connector modules; all three clients use the same table and dialog-key behavior |
 | Change the Android client | The bridge is in `android/client/`; the shell is in `android/shell/`. After changing the shell, run `node android/shell/release-shell.mjs` to update the prebuilt shell and its digest (needs JDK 17+ and the Android SDK) |
-| Support a new official client version | Update the hashes in `supported.json`. Mac recipes have to be made again; Windows recipes are ported with `windows/tools/port-desktop-recipes.mjs`; for Android also update `android/patchers/supported.json` and `renderer-patches.mjs` |
-| App (plugin) development | [host/README.en.md](../host/README.en.md#app-development) |
+| Support a new official client version | Windows: if Android still uses the current input, first move it to `windows/patchers/desktop/<version>/`. Update `supported.json`, adjust the anchors in `windows/tools/desktop-recipes/spec.mjs` to the new originals and run `build.mjs`, then follow [desktop compatibility](#desktop-compatibility) for acceptance. For Android, also verify the WebView bridge and `renderer-patches.mjs` before updating `android/patchers/supported.json` |
+| App (plugin) development | [App format and runtime](#app-development); the full development guide is in the Host package |
+
+<a id="desktop-compatibility"></a>
+### Desktop versions and compatibility
+
+The Windows x64 desktop interface is pinned to **1.1.0**; Mac ARM64 and Android's desktop renderer remain at **0.71.2**. The Android shell has its own [version](../README.en.md#client-versions). On November 14, 2026, the [Windows](https://api2.cursor.sh/updates/api/download/stable/win32-x64-user/sand) and [Mac](https://api2.cursor.sh/updates/api/download/stable/darwin-arm64/sand) feeds reported **1.1.0**. In the [dated snapshot](https://github.com/ferretgeek/prokbot-plus/blob/a868918f4e2f64ab6529b3afaf92dd6019235efe/ci/official-snapshot.json), `build` is a build ID. `observedArchiveSha256` and `observedAsarSha256` are the measured SHA-256 digests of the whole EXE/DMG and its ASAR, respectively; neither is a production pin. The [official changelog](https://x.ai/changelog/bot) stopped at **1.0.1** that day and attributed no features to 1.0.3 or 1.1.0.
+
+For 1.0.3, each platform lost 10 of 16 legacy recipe source paths; all six remaining files changed. Both preloads also differed from 1.0.1. The full installer digests were measured separately:
+
+| 1.0.3 input | Bytes | Full installer SHA-256 | Verification |
+| --- | ---: | --- | --- |
+| Windows x64 EXE | 127,368,160 | `183bbc6752e80163f4eb7a729ba4326884d4554957337872509b426a1d856729` | Valid Anysphere Authenticode signature |
+| Mac ARM64 DMG | 158,410,960 | `802e852fadb20308f83166ee13dd0c20d3e0978f982505353925dbd4b535bdd9` | Version and bundle ID checked; no Mac signature check or launch |
+
+`windows/tools/desktop-recipes/` generates the 17 Windows 1.1.0 recipes from the official installer. The renderer handshake is still v3; the preload now declares RPC methods per edge, and the main process registers handlers per edge (see [Windows client](#windows-client-new-in-this-version)). On November 16, 2026, a portable build produced by the patcher was connected to a self-hosted Host on Windows 11. Verified: pairing (including refusal when the Host returns a different address), a two-turn chat, global search, an attachment upload read back by the Bot, local command approval and execution, a restart after a forced exit with history read back, and notification decisions (no alert while the window has focus, delivery with a sound once minimized). Started on a 0.71.2 client's profile, 1.1.0 read back the conversations, the selected Bot and the panel layout without pairing again. When a local mock Host dropped every connection, gained a new reply while down and came back, the client reopened its event streams within about 7 seconds and reread the conversation; the new reply appeared once. Dictation audio reached the Host, but the test Host has no speech recognition configured. Real-time voice was verified only against a local mock relay. The Mac 1.1.0 original needs its own digests and recipes and is not supported yet. The [vendor deployment guide](https://docs.x.ai/grok-bot/deployment) does not map desktop versions to Host or execution-image digests; [private-network routing](https://docs.x.ai/grok-bot/private-networks) does not select a chat server.
+
+<a id="desktop-protocol"></a>
+#### Shared desktop protocol
+
+| Boundary | Behavior |
+| --- | --- |
+| Electron preload to main process | RPC probes in `main.mjs` and `local-services.mjs` require the trusted window's main frame, a declared method and an installed callable handler. Check the synchronous boot snapshot, call arguments, success and failure replies, and event subscription and removal. Method names alone cannot establish compatibility. |
+| Renderer to Host gateway | `gateway.mjs` sends v3 `ready` once per port and closes a port on an explicit version mismatch. In-flight IDs are deduplicated per port; cancellation affects only that request, and closing the port discards late replies. Client cancellation cannot undo a command the Host has processed. |
+| Pairing, events and settings | `connection.mjs` encrypts the device credential and retries only the saved Host origin or Tailcat tunnel. Changing the endpoint requires fresh pairing; requests reject redirects. `streams.mjs` reports online only after `/events` returns HTTP 200 with a body and `text/event-stream`. It notifies the renderer on disconnect, reconnects with `Last-Event-ID`, and handles 401 as loss of device authorization. `client-persistence.mjs` keeps the previous settings if a write fails. |
+
+<a id="desktop-validation"></a>
+#### Version checks and tests
+
+From the repository root:
+
+```sh
+node ci/check-inputs.mjs
+node ci/official-channels.mjs --online --phase planning
+node ci/official-channels.mjs --online --phase pre-release
+node ci/desktop-source-audit.mjs <windows|mac> <app.asar> 1.1.0 <asar-sha256>
+node windows/tools/desktop-recipes/build.mjs --source <Grok_Bot_1.1.0_Setup.exe> --check
+node --expose-internals windows/tools/inspect-desktop-preload.mjs <preload.cjs> <preload-sha256>
+node --test windows/tools/inspect-desktop-preload.test.mjs
+```
+
+Channel checks read public metadata. Supply an independently verified SHA-256 for each ASAR or preload. The preload inspector parses syntax without executing code and can miss dynamic channels. When updating the snapshot, check the iOS store and bundle IDs and read Android `versionName` / `versionCode` from the compiled `AndroidManifest.xml`. Run `node ci/homepage-versions.mjs --write` and `node ci/homepage-versions.mjs` to update and verify both READMEs without changing the pins.
+
+1. Verify the original signature, renderer imports through to their callers, and native dependencies separately on each platform; retain the stock entry's CSP and update policy. Bind each candidate recipe to its source and target SHA-256, replay the stock and staged behavior, and check that incorrect inputs are rejected.
+2. Check ownership and links for public, unlisted, team and Host-local catalog entries, empty/loading/search states in both languages, file and transcript tables, drafts during Bot creation, dialog focus and IME, and playback speed after reopening. Bot library selection and labels must match the Host limits: 20 MiB per file, 100 files, 100 MiB total. Chat uploads and files already on the Bot computer are separate paths.
+3. On each native client, test pairing, rejection and revocation, the Bot list and history, two chat turns, cancellation, attachment upload and readback, reconnect without duplicates and history after restart. Only then update `supported.json` / `manifest.json`, recheck the pinned inputs and run the four suites. Host changes also require an image rebuild on the target architecture.
+
+<a id="host-patch-measurement"></a>
+### Same-disk Host patch measurements
+
+On November 13, 2026, the baseline and candidate used the same WSL2 ext4 filesystem, Python interpreter, pinned input archive and recipes. The candidate streams archive verification and reuses each source digest while checking every output. The cold and warm conditions apply to the input file pages. Earlier samples from different mounts are excluded. Each version and page condition had eight timed runs (32 total); two additional warm-ups were excluded from the medians.
+
+| Input file pages | Median wall time: baseline → candidate (s) | Median peak RSS of patch child: baseline → candidate (KiB) |
+| --- | ---: | ---: |
+| Cold | 5.937 → 1.269 | 97,470 → 47,268 |
+| Warm | 6.390 → 1.557 | 97,394 → 47,208 |
+
+Every run produced the same 294 paths, sizes and SHA-256 digests. Across 34 runs including warm-ups, all 9,996 per-file hash checks passed. Wall time covers Python startup, local archive verification, unpacking, patching and output, not downloads, Docker image builds or inference. Cold input pages are not a cold machine, and child RSS is not whole-machine memory. These measurements do not establish capacity or production performance; see [interpreting capacity evidence](#capacity-evidence).
 
 ## Known limitations and to-do
 
@@ -419,6 +471,6 @@ For an upstream update, run `node ci/check-inputs.mjs` to see the production pin
   - The layout follows the official phone app, but the pages are the desktop ones: settings are tabs such as General, Computer and Updates, the marketplace has the desktop categories and content, and the conversation has no computer button at the top right as in the official phone app (the Bot's computer opens from the conversation details).
   - Background notifications rely on a foreground service; some vendor systems require allowing the app to run in the background.
   - Voice input and live calls are verified only up to the request reaching the Host; they have not been tested against a real voice service.
-  - Fully tested on an Android 15 emulator (WebView 124); pairing, the notification permission and the layout were verified on an Android 16 emulator (WebView 134). Not yet tested on a physical phone.
+  - Historical checks covered an Android 15 emulator (WebView 124) and pairing, notification permission and layout on Android 16 (WebView 134). This round's Android 15 emulator paired, read existing history and received two real model replies, but duplicate text was persisted. The full conversation flow after the fix remains unverified. The attachment check reached the system picker, not a completed upload. No physical Android device result is available.
 - The original desktop is amd64 only. Full deployment and performance with the Host and emulated desktop on the same A1 have not been verified.
 - iOS needs your own decrypted IPA and signing certificate. Headphones, Bluetooth and network switching have not been fully tested on real devices.

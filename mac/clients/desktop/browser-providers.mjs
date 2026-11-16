@@ -12,6 +12,31 @@ export async function createBrowserProviders({ payload, profile, config, window,
   const transport = require(join(payload, 'node-agent-coordinator/local-browser.cjs'));
   const activateLocale = () => shared.activateLocale(locale() === 'zh-CN' ? 'zh-CN' : 'en');
   activateLocale();
+  function options(name) {
+    return { resolveConnection: async () => ({ baseUrl: config.server, token: config.token }), label: hostname(),
+      heartbeatPolicy: transport.interval({ name: `${name}-heartbeat`, intervalMs: 10000 }),
+      reconnectPolicy: transport.reconnect(), connectDeadline: transport.deadline({ name: `${name}-connect`, timeoutMs: 15000 }),
+      stallWatchdog: transport.watchdog({ name: `${name}-stall`, idleMs: 45000 }),
+      deliveryPolicy: transport.delivery({ name: `${name}-delivery`, maxAttempts: 5, initialDelayMs: 250, maxDelayMs: 4000 }),
+    };
+  }
+  const binaryPath = transport.findSigner({ isPackaged: true });
+  const passkeys = binaryPath ? transport.passkeyProvider({ ...options('local-passkeys'),
+    consent: { requestConsent: ceremony => {
+      activateLocale();
+      return original.requestPasskey({ origin: ceremony.origin,
+        rpId: transport.relyingParty(ceremony.optionsJson) ?? ceremony.origin }, BrowserWindow);
+    }, finish: () => original.finishPasskey() },
+    signer: transport.signer({ binaryPath, onStatus: status => original.updatePasskey(status),
+      onPinRequest: async (value, promptId) => (await original.requestPin({ promptId, ...value })).pin ?? undefined }),
+    denialMute: transport.expiry({ name: 'local-passkeys-denied', ttlMs: 60000 }),
+  }) : null;
+  passkeys?.start();
+  const closePasskeys = () => { passkeys?.stop(); original.finishPasskey(); };
+  // Desktop 1.1.0 no longer ships the Chrome cookie import, its approval UI or the cookie provider.
+  if (!original.createChromeImport || !transport.cookieProvider)
+    return { handlers: {}, close: closePasskeys, capabilities: { browserLoginImport: false, passkeys: Boolean(passkeys) } };
+
   const importer = original.createChromeImport({ platform: process.platform, homeDir: homedir(),
     workerEntryPath: join(payload, 'electron-main/chrome-import-worker.cjs') });
   const scope = createHash('sha256').update(`${config.server}\0${config.deviceId}`).digest('hex').slice(0, 24);
@@ -43,27 +68,8 @@ export async function createBrowserProviders({ payload, profile, config, window,
       }, origins, { requestId, ...(agentId ? { agentId } : {}) }, abort.signal);
     } finally { if (pending === abort) pending = null; }
   };
-  function options(name) {
-    return { resolveConnection: async () => ({ baseUrl: config.server, token: config.token }), label: hostname(),
-      heartbeatPolicy: transport.interval({ name: `${name}-heartbeat`, intervalMs: 10000 }),
-      reconnectPolicy: transport.reconnect(), connectDeadline: transport.deadline({ name: `${name}-connect`, timeoutMs: 15000 }),
-      stallWatchdog: transport.watchdog({ name: `${name}-stall`, idleMs: 45000 }),
-      deliveryPolicy: transport.delivery({ name: `${name}-delivery`, maxAttempts: 5, initialDelayMs: 250, maxDelayMs: 4000 }),
-    };
-  }
   const cookies = transport.cookieProvider({ ...options('local-cookies'), present, cancel });
-  const binaryPath = transport.findSigner({ isPackaged: true });
-  const passkeys = binaryPath ? transport.passkeyProvider({ ...options('local-passkeys'),
-    consent: { requestConsent: ceremony => {
-      activateLocale();
-      return original.requestPasskey({ origin: ceremony.origin,
-        rpId: transport.relyingParty(ceremony.optionsJson) ?? ceremony.origin }, BrowserWindow);
-    }, finish: () => original.finishPasskey() },
-    signer: transport.signer({ binaryPath, onStatus: status => original.updatePasskey(status),
-      onPinRequest: async (value, promptId) => (await original.requestPin({ promptId, ...value })).pin ?? undefined }),
-    denialMute: transport.expiry({ name: 'local-passkeys-denied', ttlMs: 60000 }),
-  }) : null;
-  cookies.start(); passkeys?.start();
+  cookies.start();
   return { handlers: {
     listCookieOriginGrants: () => access.origins,
     putCookieOriginGrants: async ({ grants }) => {
@@ -72,6 +78,6 @@ export async function createBrowserProviders({ payload, profile, config, window,
         .map(item => [JSON.stringify([item.profileId, item.origin]), item])).values()] }));
       return access.origins;
     },
-  }, close() { cookies.stop(); passkeys?.stop(); void cancel(); original.finishPasskey(); },
+  }, close() { cookies.stop(); void cancel(); closePasskeys(); },
     capabilities: { browserLoginImport: true, passkeys: Boolean(passkeys) } };
 }

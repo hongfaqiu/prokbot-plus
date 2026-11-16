@@ -6,7 +6,8 @@
 // Each macOS recipe is replayed on the macOS original, every copied byte range is mapped
 // onto the Windows original through a byte alignment, and asset names inside added bytes
 // are translated. The output is verified to differ from the macOS result only by
-// differences already present between the two originals.
+// differences already present between the two originals. It goes to the Windows input
+// directory for the macOS version unless --out names another.
 //
 //   node windows/tools/port-desktop-recipes.mjs --mac <mac app.asar|dir> --win <win app.asar|dir>
 import { mkdtemp, readFile, readdir, rm, stat, writeFile, mkdir } from 'node:fs/promises';
@@ -17,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 import { applyByteRecipe } from '../../mac/patchers/desktop/release-recipes.mjs';
+import { windowsInputs } from '../patchers/desktop/inputs.mjs';
 import { align, gaps, mapRange } from './byte-align.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -24,7 +26,8 @@ const repo = path.resolve(here, '../..');
 const macRecipes = path.join(repo, 'mac/patchers/desktop/recipes');
 const args = process.argv.slice(2);
 const arg = name => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : null; };
-const output = path.resolve(arg('--out') ?? path.join(repo, 'windows/patchers/desktop'));
+const macVersion = JSON.parse(await readFile(path.join(repo, 'mac/patchers/desktop/supported.json'), 'utf8')).version;
+const output = path.resolve(arg('--out') ?? (await windowsInputs(macVersion)).directory);
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const ASSETS = 'dist/renderer/assets';
 

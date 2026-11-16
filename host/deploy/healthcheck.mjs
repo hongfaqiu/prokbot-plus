@@ -28,6 +28,17 @@ export async function checkDeploymentHealth(env = process.env) {
       !/^OPENAI_MODEL=.+$/m.test(model)
     )
       return true;
+    // HostSupervisor intentionally waits for the execution node on split installations.
+    if (env.GROKBOT_REQUIRE_EXECUTION_NODE === '1') {
+      const state = await readFile(join(data, 'execution-node.json'), 'utf8').catch(error => {
+        if (error.code === 'ENOENT') return null;
+        throw error;
+      });
+      if (state === null) return true;
+      const saved = JSON.parse(state);
+      if (saved?.version !== 1 || typeof saved.config?.enabled !== 'boolean') return false;
+      if (!saved.config.enabled) return true;
+    }
     const token = await internalCredential(
       env.GROKBOT_INTERNAL_HOST_TOKEN_FILE ?? join(data, "internal-host-token"),
     );

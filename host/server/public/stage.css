@@ -151,8 +151,7 @@ label.composer { padding-right: 22px; }
   align-items: end;
 }
 .hero-copy { display: flex; flex-direction: column; gap: 16px; grid-area: copy; align-self: start; }
-.hero-title { display: flex; flex-direction: column; font: 600 68px/1.02 var(--font-sans); letter-spacing: -0.04em; }
-.hero-title span { white-space: nowrap; }
+.hero-title { display: flex; flex-direction: column; font: 600 68px/1.02 var(--font-sans); letter-spacing: -0.04em; overflow-wrap: anywhere; }
 .hero-usage { color: var(--sand-text-secondary); font: 17px/24px var(--font-sans); font-variant-numeric: tabular-nums; }
 .hero-host { grid-area: host; align-self: center; }
 .hero-host .face { --size: 196px; box-shadow: inset calc(var(--size) * -.05) calc(var(--size) * -.07) calc(var(--size) * .14) #0000002e, 0 calc(var(--size) * .14) calc(var(--size) * .22) calc(var(--size) * -.1) #00000059; }
@@ -172,7 +171,7 @@ label.composer { padding-right: 22px; }
 @media (max-width: 640px) {
   .page.overview { gap: 36px; padding-top: 28px; }
   .hero { grid-template-areas: "copy host" "crew crew"; gap: 28px 12px; align-items: start; }
-  .hero-title { font-size: 40px; }
+  .hero-title { font-size: 32px; letter-spacing: 0; text-wrap: balance; }
   .hero-usage { font-size: 15px; line-height: 22px; }
   .hero-host { align-self: start; }
   .hero-host .face { --size: 84px; }

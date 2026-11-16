@@ -156,7 +156,7 @@ export class HostSupervisor {
         !this.stopping
       ) {
         await this.status(revision, "waiting", "正在启动 Host");
-        this.startHost(revision);
+        if (!this.stopping) this.startHost(revision);
       }
       return;
     }

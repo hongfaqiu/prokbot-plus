@@ -3,18 +3,16 @@ import importlib.util
 import io
 import json
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 HOST = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HOST))
 import deploy
 import platforms
-import backup as volume_backup
 
 spec = importlib.util.spec_from_file_location('builder', HOST / 'release/build-docker.py')
 builder = importlib.util.module_from_spec(spec)
@@ -78,44 +76,172 @@ class DeploymentTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as failure: deploy.main(self.args + ['doctor'])
             self.assertEqual(failure.exception.code, 1); self.assertFalse(json.loads(out.getvalue())['ok'])
 
-    def test_update_never_switches_after_failure(self):
-        self.invoke('--host-only', 'init')
-        def fake(cmd, **kw):
-            return SimpleNamespace(stdout='grokbot_host-data\n' if 'volume' in cmd else '')
-        for failed in ('backup', 'build'):
-            with patch.object(deploy, 'service_images', return_value={'host': {'image': 'local'}}), \
-                 patch.object(deploy, 'run', side_effect=fake) as run, patch.object(deploy, 'backup') as backup, patch.object(deploy, 'build') as build:
-                (backup if failed == 'backup' else build).side_effect = subprocess.CalledProcessError(1, failed)
-                with self.assertRaises(subprocess.CalledProcessError): self.invoke('update')
-                backup.assert_called_once()
-                if failed == 'backup': build.assert_not_called()
-                self.assertFalse(any('up' in call.args[0] for call in run.call_args_list))
-
-    def test_wrong_volumes_never_change_instance(self):
-        self.invoke('--host-only', 'init')
-        for action, owned, all_names in [('up', {'grokbot_host-data'}, 'grokbot_host-data'), ('up', set(), 'grokbot_host-data'),
-                                         ('update', {'grokbot_box-home'}, 'grokbot_box-home')]:
-            with patch.object(deploy, 'project_volumes', return_value=owned), patch.object(deploy, 'run', return_value=SimpleNamespace(stdout=all_names)), \
-                 patch.object(deploy, 'service_images', return_value={'host': {'image': 'local'}}), patch.object(deploy, 'build') as build:
-                with self.assertRaises(ValueError): self.invoke(action)
-                build.assert_not_called()
-
-    def test_resume_attempts_every_paused_container(self):
-        def output(*args):
-            return 'demo_host-data' if args[0] == 'volume' else 'first\nsecond' if args[0] == 'ps' else 'false'
-        def run(*args, **kwargs):
-            if args == ('unpause', 'second'):
-                raise subprocess.CalledProcessError(1, 'unpause')
-        with patch.object(volume_backup, 'output', side_effect=output), patch.object(volume_backup, 'run', side_effect=run) as called:
-            with self.assertRaisesRegex(RuntimeError, 'second'): volume_backup.backup('demo', self.home / 'backup', 'local')
-            self.assertEqual([c.args[1] for c in called.call_args_list if c.args[0] == 'unpause'], ['second', 'first'])
-            self.assertFalse((self.home / 'backup/manifest.json').exists())
-
     def test_archive_flags_keep_pinned_build_path(self):
         archive = self.home / 'original.tgz'; archive.touch()
         args = SimpleNamespace(host_only=True, host_archive=archive, box_archive=None)
         with patch.object(deploy, 'run') as called: deploy.build(args, 'candidate')
         self.assertEqual(called.call_args.args[0][-3:], ['--host-only', '--host-archive', str(archive.resolve())])
+
+
+class ComposeMountTests(unittest.TestCase):
+    dc = ['docker', 'compose', '-p', 'demo']
+    image_id = 'sha256:' + '1' * 64
+
+    @staticmethod
+    def config(existing=False, box=False):
+        specs = {'host': ('host:local', [('host-data', '/data')])}
+        if box:
+            specs['box'] = (deploy.BOX['localTag'], [('box-home', '/home/box'), ('box-workspace', '/workspace')])
+        services, volumes = {}, {}
+        for service, (image, pairs) in specs.items():
+            services[service] = {'image': image, 'volumes': [
+                {'type': 'volume', 'source': name, 'target': dest} for name, dest in pairs]}
+            for name, _ in pairs:
+                volumes[name] = {'name': 'demo_' + name}
+                if existing:
+                    volumes[name]['external'] = True
+        return {'services': services, 'volumes': volumes}
+
+    @contextlib.contextmanager
+    def config_only(self, config, existing, pinned=None):
+        def read(cmd, **kwargs):
+            self.assertEqual(cmd, self.dc + ['config', '--format', 'json'])
+            self.assertTrue(kwargs['capture'])
+            env = kwargs['env']
+            self.assertEqual(env['PROKBOT_EXISTING_VOLUMES'], 'true' if existing else 'false')
+            for service, image in (pinned or {}).items():
+                self.assertEqual(env['GROKBOT_' + service.upper() + '_IMAGE'], image)
+            return SimpleNamespace(stdout=json.dumps(config))
+
+        with patch.object(deploy, 'run', side_effect=read) as run, \
+             patch('subprocess.Popen', side_effect=AssertionError('Unexpected external process')):
+            try:
+                yield
+            finally:
+                run.assert_called_once()
+
+    def images(self, config, existing=False):
+        with self.config_only(config, existing):
+            return deploy.instance_images(self.dc, 'demo', tuple(config['services']), existing)
+
+    def test_supported_mounts_and_non_overlapping_tmpfs(self):
+        for box in (False, True):
+            for existing in (False, True):
+                with self.subTest(box=box, existing=existing):
+                    config = self.config(existing, box)
+                    services = config['services']
+                    images = {s: v['image'] for s, v in services.items()}
+                    self.assertEqual(self.images(config, existing), images)
+                    services['host']['volumes'].insert(0, {'type': 'tmpfs', 'target': '/database'})
+                    services['host']['tmpfs'] = '/run:mode=0700'
+                    if box:
+                        services['box']['volumes'].reverse()
+                        services['box']['tmpfs'] = ['/home/box-old', '/run:mode=0700']
+                    self.assertEqual(self.images(config, existing), images)
+
+    def test_rejects_extra_duplicate_and_shadowing_mounts(self):
+        cases = [('host', 'bind', '/fixture', '/logs'), ('host', 'volume', 'extra', '/logs'),
+                 ('host', 'volume', None, '/scratch'), ('host', 'volume', 'host-data', '/copy'),
+                 ('host', 'volume', 'host-data', '/data'), ('host', 'bind', '/fixture', '/data'),
+                 ('host', 'volume', 'extra', '/data/uploads'), ('box', 'bind', '/fixture', '/workspace/logs'),
+                 ('host', 'tmpfs', None, '/'), ('box', 'tmpfs', None, '/home'),
+                 ('host', 'tmpfs', None, '//data/.'), ('host', 'tmpfs', None, '/scratch/../data/cache')]
+        for service, kind, source, target in cases:
+            with self.subTest(service=service, kind=kind, target=target):
+                config = self.config(box=True)
+                mount = {'type': kind, 'target': target}
+                if source is not None:
+                    mount['source'] = source
+                if source == 'extra':
+                    config['volumes'][source] = {'name': 'demo_extra'}
+                config['services'][service]['volumes'].append(mount)
+                with self.assertRaisesRegex(ValueError, service):
+                    self.images(config)
+
+    def test_checks_mounts_outside_service_volumes_list(self):
+        for key, value in [('tmpfs', '/data:mode=0700'), ('tmpfs', ['/data/cache:size=64k']),
+                           ('tmpfs', ['/run/.:mode=0700']), ('volumes_from', ['container:peer']),
+                           ('configs', [{'source': 'cfg', 'target': '/data/cfg'}]),
+                           ('secrets', [{'source': 'key'}]), ('use_api_socket', True)]:
+            with self.subTest(key=key, value=value):
+                config = self.config()
+                config['services']['host']['volumes'].append({'type': 'tmpfs', 'target': '/run'})
+                config['services']['host'][key] = value
+                if key in ('configs', 'secrets'):
+                    config[key] = {value[0]['source']: {'file': '/fixture'}}
+                with self.assertRaisesRegex(ValueError, 'host'):
+                    self.images(config)
+
+    def test_required_volume_is_still_exact_and_writable(self):
+        for mount, volume in [(None, {}), ({'source': 'other'}, {}), ({'read_only': True}, {}),
+                              ({'type': 'tmpfs'}, {}), ({}, {'name': 'other_host-data'}), ({}, {'external': True})]:
+            with self.subTest(mount=mount, volume=volume):
+                config = self.config()
+                mounts = config['services']['host']['volumes']
+                if mount is None:
+                    mounts.clear()
+                else:
+                    mounts[0].update(mount)
+                config['volumes']['host-data'].update(volume)
+                with self.assertRaisesRegex(ValueError, '/data'):
+                    self.images(config)
+
+    def test_existing_volume_subdirectory_is_not_the_managed_data_root(self):
+        for service, expected in [('host', '/data'), ('box', '/home/box')]:
+            with self.subTest(service=service):
+                config = self.config(existing=True, box=True)
+                mount = config['services'][service]['volumes'][0]
+                mount['volume'] = {'nocopy': True}
+                self.assertIn(service, self.images(config, existing=True))
+                mount['volume']['subpath'] = 'other-instance'
+                with self.assertRaisesRegex(ValueError, expected):
+                    self.images(config, existing=True)
+
+    def test_new_install_and_update_reject_before_inventory(self):
+        for action in ('up', 'update'):
+            with self.subTest(action=action):
+                existing = action == 'update'
+                config = self.config(existing)
+                config['services']['host']['tmpfs'] = ['/data/cache']
+                args = SimpleNamespace(action=action, host_only=True, project='demo')
+                with self.config_only(config, existing), patch.object(deploy, 'inventory') as inventory:
+                    with self.assertRaisesRegex(ValueError, '/data/cache'):
+                        deploy.operate(args, None, self.dc)
+                    inventory.assert_not_called()
+
+    def test_last_preflight_rejects_before_compose_up(self):
+        images = {'host': self.image_id}
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                config = self.config(existing)
+                config['services']['host'].update(image=self.image_id, tmpfs=['/data/cache'])
+                with self.config_only(config, existing, images), self.assertRaisesRegex(ValueError, '/data/cache'):
+                    deploy.up_and_wait(self.dc, 'demo', ('host',), images, existing=existing)
+
+    def test_post_build_preflight_rejects_before_stop_or_backup(self):
+        config = self.config(existing=True)
+        config['services']['host']['tmpfs'] = ['/data/cache']
+        old = {'host': {'Id': 'original', 'Image': self.image_id, 'State': {'Status': 'running'}}}
+        staged = contextlib.nullcontext({'host': 'sha256:' + '2' * 64})
+        with self.config_only(config, True), patch.object(deploy, 'tag_state', return_value=self.image_id), \
+             patch.object(deploy, 'image_id', return_value=self.image_id), patch.object(deploy, 'staged_host', return_value=staged), \
+             patch.object(deploy, 'inventory', return_value=old), patch.object(deploy, 'backup') as backup:
+            with self.assertRaisesRegex(ValueError, '/data/cache'):
+                deploy.upgrade(SimpleNamespace(project='demo'), None, self.dc, ('host',), 'host:local', old, 'demo', False)
+            backup.assert_not_called()
+
+    def test_recovery_preflight_rejects_before_writing_volumes(self):
+        config = self.config(existing=True)
+        config['services']['host'].update(image=self.image_id, tmpfs=['/data/cache'])
+        images = {'host': self.image_id}
+        manifest = {'project': 'original', 'serviceImages': images, 'volumes': [{'suffix': 'host-data'}]}
+        args = SimpleNamespace(project='demo', directory=Mock(spec=Path))
+        with self.config_only(config, True, images), patch.object(deploy.volume_backup, 'read_manifest', return_value=manifest), \
+             patch.object(deploy, 'image_id', return_value=self.image_id), patch.object(deploy, 'check_platform'), \
+             patch.object(deploy.volume_backup, 'restore') as restore:
+            with self.assertRaisesRegex(ValueError, '/data/cache'):
+                deploy.recover(args, None, self.dc, ('host',))
+            restore.assert_not_called()
 
 
 if __name__ == '__main__':

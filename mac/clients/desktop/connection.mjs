@@ -62,17 +62,41 @@ function validDevice(record) {
     typeof record.token === 'string' && record.token.length >= 16 && !/[^!-~]/.test(record.token);
 }
 
-export async function pair(server, pairingKey, fetcher = fetch, { tunneled = false } = {}) {
+export async function pair(server, credential, fetcher = fetch, { tunneled = false, mode = 'code' } = {}) {
   server = normalizeServer(server);
-  pairingKey = normalizePairingCode(pairingKey);
-  if (!/^[A-Z0-9]{6}$/.test(pairingKey)) throw new Error(grokText('请输入 6 位配对码。', 'Enter a six-character pairing code.'));
+  const byPassword = mode === 'password';
+  let payload;
+  if (byPassword) {
+    if (typeof credential !== 'string' || credential.length === 0)
+      throw new Error(grokText('请输入 Host 管理员密码。', 'Enter the Host admin password.'));
+    if (credential.length > 128)
+      throw new Error(grokText('管理员密码过长。', 'Admin password is too long.'));
+    payload = { password: credential, deviceName: os.hostname(), platform: 'desktop' };
+  } else {
+    const pairingKey = normalizePairingCode(credential);
+    if (!/^[A-Z0-9]{6}$/.test(pairingKey)) throw new Error(grokText('请输入 6 位配对码。', 'Enter a six-character pairing code.'));
+    payload = { pairingKey, deviceName: os.hostname(), platform: 'desktop' };
+  }
   const response = await fetcher(`${server}/connect/pair`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pairingKey, deviceName: os.hostname(), platform: 'desktop' }),
+    body: JSON.stringify(payload),
     signal: AbortSignal.timeout(15000), redirect: 'error',
   });
   const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(response.status === 401 ? grokText('配对码 无效或已过期。', 'Pairing code is invalid or expired.') : grokText(`连接失败（HTTP ${response.status}）。`, `Connection failed (HTTP ${response.status}).`));
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error(byPassword
+        ? grokText('管理员密码不正确。', 'Admin password is incorrect.')
+        : grokText('配对码 无效或已过期。', 'Pairing code is invalid or expired.'));
+    }
+    if (response.status === 429) {
+      throw new Error(grokText('尝试次数过多，请稍后重试。', 'Too many attempts. Try again later.'));
+    }
+    if (response.status === 409 && typeof result?.error === 'string' && result.error) {
+      throw new Error(result.error);
+    }
+    throw new Error(grokText(`连接失败（HTTP ${response.status}）。`, `Connection failed (HTTP ${response.status}).`));
+  }
   if (!validDevice(result))
     throw new Error(grokText('Host 返回的设备凭证无效。', 'Host returned invalid device credentials.'));
   if (!tunneled && normalizeServer(result.gatewayUrl) !== server)

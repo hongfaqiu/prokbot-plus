@@ -3,7 +3,7 @@
 // POST /v1/messages and back, keeping images, documents, tool results and signed thinking.
 import { explicitEffort, fileKind, fileText, mediaUrl, messageParts, ModelRequestError, parseDataUrl, parseEvent,
   parseToolArguments, postWithFallback, providerError, readSse, reasoningOrigin, reasoningProviderOptions, replayRejected,
-  serializeToolCalls, textValue, toolSchema, unsupportedFileNote } from './model-common.mjs';
+  streamToolCalls, textValue, toolSchema, unsupportedFileNote } from './model-common.mjs';
 
 export const FORMAT = 'anthropic';
 export const ANTHROPIC_VERSION = '2026-10-21';
@@ -210,11 +210,11 @@ const OPTIONAL = ['fallbacks', 'thinking.display', 'output_config'];
 
 /** One streamed Messages API turn; yields Harness stream parts and returns the assembled message. */
 export async function* anthropicTurn(context) {
-  const { fetchImpl, endpoint, apiKey, headers, model, messages, tools, effort, maxTokens, signal, state,
+  const { fetchImpl, endpoint, apiKey, headers, model, messages, tools, effort, maxTokens, signal, waitForIO, state,
     notifyRequest, onModel, onId, onUsage } = context;
   const anthropicTools = convertAnthropicTools(tools);
   let replayed = false;
-  const { http } = await postWithFallback({ fetchImpl, url: endpoint, apiKey, signal, state, optional: OPTIONAL,
+  const { http } = await postWithFallback({ fetchImpl, url: endpoint, apiKey, signal, waitForIO, state, optional: OPTIONAL,
     headers: body => {
       const value = anthropicHeaders(apiKey, { stream: true, body });
       for (const [key, entry] of new Headers(headers)) value.set(key, entry);
@@ -239,7 +239,7 @@ export async function* anthropicTurn(context) {
     for (const [key, value] of Object.entries(usage)) if (value !== null && value !== undefined) rawUsage[key] = value;
     onUsage(anthropicUsage(rawUsage));
   };
-  for await (const data of readSse(http.body)) {
+  for await (const data of readSse(http.body, { waitForIO })) {
     signal.throwIfAborted();
     const event = parseEvent(data);
     if (event.type === 'error') throw providerError(event, undefined, http.headers, apiKey);
@@ -260,7 +260,7 @@ export async function* anthropicTurn(context) {
         blocks.set(event.index, { type: 'redacted-reasoning', data: block.data ?? '' });
         if (block.data) yield { type: 'redacted-reasoning', data: block.data, ...reasoningOptions() };
       } else if (block.type === 'tool_use') {
-        blocks.set(event.index, { type: 'tool-use', id: block.id ?? '', name: block.name ?? '', json: '' });
+        blocks.set(event.index, { type: 'tool-use', id: block.id ?? '', name: block.name ?? '', input: block.input, json: '' });
       }
     } else if (event.type === 'content_block_delta') {
       const block = blocks.get(event.index), delta = event.delta ?? {};
@@ -294,13 +294,14 @@ export async function* anthropicTurn(context) {
     }
   }
   signal.throwIfAborted();
-  if (!stopped && !stopReason) throw new ModelRequestError('Model SSE stream ended before a completion marker');
   if (stopReason === 'max_tokens') throw new ModelRequestError('Model response stopped with max_tokens', { code: 'length' });
   if (stopReason === 'model_context_window_exceeded') throw new ModelRequestError('Model context window exceeded', { code: 'context_length_exceeded' });
   if (stopReason === 'refusal') {
     const category = stopDetails?.category ? ` (${stopDetails.category})` : '';
     throw new ModelRequestError(`Model declined this request${category}`, { code: 'content_filter' });
   }
+  if (!stopped || !stopReason) throw new ModelRequestError('Model SSE stream ended before a completion marker');
+  if (!['end_turn', 'stop_sequence', 'tool_use'].includes(stopReason)) throw new ModelRequestError(`Unsupported model stop reason: ${stopReason}`);
   const content = [], calls = [];
   for (const [, block] of [...blocks.entries()].sort(([a], [b]) => a - b)) {
     if (block.type === 'text') { if (block.text) content.push(block); continue; }
@@ -310,9 +311,11 @@ export async function* anthropicTurn(context) {
     }
     if (block.type === 'reasoning' || block.type === 'redacted-reasoning') { content.push({ ...block, ...reasoningOptions() }); continue; }
     if (!block.id || !block.name) throw new ModelRequestError('Incomplete model tool call identity');
-    const call = { type: 'tool-call', toolCallId: block.id, toolName: block.name, args: parseToolArguments(block.name, block.json) };
+    const call = { type: 'tool-call', toolCallId: block.id, toolName: block.name,
+      args: parseToolArguments(block.name, block.json || JSON.stringify(block.input)) };
     calls.push(call); content.push(call);
   }
-  yield* serializeToolCalls(calls);
+  if ((stopReason === 'tool_use') !== Boolean(calls.length)) throw new ModelRequestError('Model tool calls do not match the stop reason');
+  yield* streamToolCalls(calls, messages);
   return { id, model: responseModel, content, toolCalls: calls.length, usage: anthropicUsage(rawUsage) };
 }

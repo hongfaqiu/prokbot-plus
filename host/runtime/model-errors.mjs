@@ -3,7 +3,7 @@ import { ModelRequestError } from './model-session.mjs';
 const CONFIG_CODES = new Set(['invalid_api_key', 'authentication_error']);
 const TERMINAL_CODES = new Set([
   'invalid_request_error', 'model_not_found', 'permission_denied', 'insufficient_quota',
-  'content_filter', 'length',
+  'content_filter', 'length', 'repeated_user_delivery',
 ]);
 const TERMINAL_STATUSES = new Set([400, 402, 403, 404, 405, 413, 415, 422]);
 const RATE_LIMIT_CODES = new Set(['rate_limit_error', 'rate_limit_exceeded']);

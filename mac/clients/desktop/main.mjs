@@ -19,7 +19,7 @@ import { createSounds } from './sounds.mjs';
 import { mintVoiceCredential, createVoiceAvailability } from './voice.mjs';
 import { externalHttpUrl } from './external-url.mjs';
 import { installExternalLinks } from './external-links.mjs';
-import { auth, boot, theme, language, experiments, createLocalServices, probeLocalMethod } from './local-services.mjs';
+import { auth, boot, theme, language, experiments, createLocalServices, desktopEdges, probeLocalMethod } from './local-services.mjs';
 import { createDesktopUpdater, loadDesktopUpdateConfig } from './updater.mjs';
 
 const clientRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -130,7 +130,7 @@ async function openExternal(value) {
 async function showConnection() {
   if (!app.isReady()) return;
   if (connectWindow && !connectWindow.isDestroyed()) { connectWindow.show(); connectWindow.focus(); return; }
-  connectWindow = new BrowserWindow({ width: 510, height: 510, resizable: false, maximizable: false,
+  connectWindow = new BrowserWindow({ width: 510, height: 550, resizable: false, maximizable: false,
     title: localText('连接 Grok Bot', 'Connect Grok Bot'), backgroundColor: '#111111', ...connectWindowChrome(),
     webPreferences: { preload: path.join(clientRoot, 'connect-preload.cjs'), sandbox: true, nodeIntegration: false, contextIsolation: true } });
   connectWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -173,6 +173,11 @@ async function showWorkspace() {
   browserProviders = await createBrowserProviders({ payload, profile, config: activeConfig, window: win,
     BrowserWindow, locale: () => language.resolved });
   win.on('focus', reportFocus); win.on('blur', reportFocus);
+  // 1.1.0 tracks whether the workspace is on screen; 0.71.2 ignores these events.
+  const send = (name, value) => { if (!win.isDestroyed()) win.webContents.send(`dune-rpc:main:e:${name}`, value); };
+  for (const event of ['show', 'hide', 'minimize', 'restore'])
+    win.on(event, () => send('window-visibility', { visible: win.isVisible() && !win.isMinimized() }));
+  win.on('focus', () => send('window-focus', {}));
   win.on('close', event => {
     if (!quitting) { event.preventDefault(); win.hide(); }
     if (process.env.GROKBOT_LOCAL_DEBUG_PORT) console.log('[notification-window]', JSON.stringify({visible:win.isVisible(),focused:win.isFocused(),quitting}));
@@ -199,7 +204,7 @@ async function showWorkspace() {
     void updater.check();
   }
   methodCall = await createLocalServices(profile, win, {
-    appVersion: app.getVersion(), persistence, updater,
+    appVersion: app.getVersion(), persistence, updater, emit: send,
     command: gateway.command, request: gateway.request, connection: showConnection, openExternal,
     attachmentHandlers: { ...uploads.handlers, ...createAttachmentHandlers({
       command: gateway.command,
@@ -266,7 +271,8 @@ ipcMain.handle('grokbot-local:voice-credential', async (event, agentId) => {
     if (clientSettings.realtimeVoice !== true) throw new Error(localText('请启用实时语音。', 'Enable realtime voice.'));
     return { ok: true, credential: await mintVoiceCredential({ request: gateway.request, server: config.server }, agentId) };
   }
-  catch (error) { return { ok: false, fault: 'unavailable', detail: error.message }; }
+  // 1.1.0 reads a missing usage refusal as a usage limit; this failure is never one.
+  catch (error) { return { ok: false, fault: { reason: 'unavailable' }, usageRefusal: null, detail: error.message }; }
 });
 ipcMain.handle('grokbot-local:voice-preference', async (event, enabled) => {
   if (!trusted(event, mainWindow) || !methodCall) throw new Error('Unexpected renderer');
@@ -275,7 +281,7 @@ ipcMain.handle('grokbot-local:voice-preference', async (event, enabled) => {
 ipcMain.handle('grokbot-local:pair', async (event, args) => {
   requireConnection(event);
   try {
-    const saved = config, editing = args.edit === true, tunneled = args.tailcat === true;
+    const saved = config, editing = args.edit === true, tunneled = args.tailcat === true, mode = args.mode === 'password' ? 'password' : 'code';
     if (editing && !savedConnectionMatches(saved, args.server, tunneled))
       throw new Error(localText('更改 Host 地址需要新的配对码。', 'Enter a new pairing code to change the Host address.'));
     // Check the keychain before consuming a one-use pairing Key.
@@ -290,7 +296,7 @@ ipcMain.handle('grokbot-local:pair', async (event, args) => {
         await verifyDevice(nextTransport.server, saved);
         if (config !== saved) throw new Error(localText('连接已更改，请重试。', 'Connection changed. Try again.'));
         next = { ...saved, ...nextTransport };
-      } else next = { ...await pair(nextTransport.server, args.key, fetch, { tunneled: nextTransport.tailcat }), ...nextTransport };
+      } else next = { ...await pair(nextTransport.server, mode === 'password' ? (args.password ?? args.key) : args.key, fetch, { tunneled: nextTransport.tailcat, mode }), ...nextTransport };
       await store.save(next);
     } catch (error) { if (!reuse) await nextTransport.close(); throw error; }
     disposeWorkspace(); if (!reuse) await transport?.close(); transport = nextTransport; config = next; connectionError = '';
@@ -339,8 +345,13 @@ const restrict = target => target.webRequest.onBeforeRequest((details, callback)
   } catch { callback({ cancel: true }); }
 });
 restrict(session.defaultSession); app.on('session-created', restrict);
-const preload = await readFile(path.join(payload, 'electron-preload/preload.cjs'), 'utf8');
-const names = new Set([...preload.matchAll(/([A-Za-z_$][\w$]*):t\(\)\.(?:args|noArgs)/g)].map(match => match[1]));
+const { main: names, others } = desktopEdges(await readFile(path.join(payload, 'electron-preload/preload.cjs'), 'utf8'));
+// The desktop mount panels and Spotlight are official windows this client never opens.
+for (const [edge, methods] of others) {
+  const failure = { code: 'edge/unknown-method', detail: `The local client does not provide ${edge}` };
+  for (const method of methods) ipcMain.handle(`dune-rpc:${edge}:m:${method}`, () => ({ ok: false, failure }));
+  ipcMain.handle(`dune-rpc:${edge}:probe`, event => ({ ok: Boolean(trusted(event, mainWindow)), value: false }));
+}
 for (const method of names) ipcMain.handle(`dune-rpc:main:m:${method}`, async (event, args) => {
   if (!trusted(event, mainWindow)) return { ok: false, failure: { code: 'edge/untrusted', detail: 'Unexpected renderer' } };
   try {

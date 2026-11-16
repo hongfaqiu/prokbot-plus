@@ -4,7 +4,7 @@ import { t, locale } from './i18n.js';
 export function createVoiceEditor({ api, toast, busy }) {
   const form = $('#voice-form'), fields = form.elements, button = form.querySelector('[type=submit]');
   const error = $('#voice-error'), preview = $('#voice-preview'), player = $('#voice-audio');
-  let loaded = false, saved, audioUrl, controller, dirty = false, catalogPage = 0;
+  let loaded = false, saved, audioUrl, dirty = false, catalogPage = 0;
   const library = $('#voice-library'), libraryLoad = $('#voice-library-load'), libraryNext = $('#voice-library-next');
   $('#voice-library-language').value = locale.startsWith('zh') ? 'zh' : 'en';
   $('#voice-preview-text').value = t('你好，我们可以开始语音聊天了。');
@@ -90,15 +90,13 @@ export function createVoiceEditor({ api, toast, busy }) {
     });
   });
   preview.addEventListener('click', () => void busy(preview, async () => {
-    clearAudio(); error.hidden = true; controller?.abort(); controller = new AbortController();
+    clearAudio(); error.hidden = true;
     try {
-      const response = await fetch('/admin/api/voice/test', { method: 'POST', credentials: 'same-origin',
-        headers: { 'content-type': 'application/json', 'x-grokbot-csrf': '1' }, signal: controller.signal,
-        body: JSON.stringify({ text: $('#voice-preview-text').value.trim() }) });
-      if (!response.ok) throw new Error((await response.json()).error);
-      audioUrl = URL.createObjectURL(await response.blob()); player.src = audioUrl; player.hidden = false;
+      const audio = await api('/admin/api/voice/test', { method: 'POST',
+        binary: true, body: { text: $('#voice-preview-text').value.trim() } });
+      audioUrl = URL.createObjectURL(audio); player.src = audioUrl; player.hidden = false;
       await player.play().catch(() => {});
     } catch (e) { if (e.name !== 'AbortError') { error.textContent = errorText(e.message); error.hidden = false; } }
   }));
-  return { load, reset() { controller?.abort(); loaded = false; saved = undefined; clearAudio(); form.reset(); controls(); } };
+  return { load, reset() { loaded = false; saved = undefined; clearAudio(); form.reset(); controls(); } };
 }
