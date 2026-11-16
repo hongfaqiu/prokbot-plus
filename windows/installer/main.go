@@ -37,9 +37,8 @@ var (
 	messageBox       = user32.NewProc("MessageBoxW")
 	createWindow     = user32.NewProc("CreateWindowExW")
 	destroyWindow    = user32.NewProc("DestroyWindow")
-	peekMessage      = user32.NewProc("PeekMessageW")
 	translateMessage = user32.NewProc("TranslateMessage")
-	dispatchMessage  = user32.NewProc("DispatchMessageW")
+	dispatchMessageW = user32.NewProc("DispatchMessageW")
 	setWindowText    = user32.NewProc("SetWindowTextW")
 	systemMetrics    = user32.NewProc("GetSystemMetrics")
 	uiLanguage       = kernel32.NewProc("GetUserDefaultUILanguage")
@@ -85,52 +84,9 @@ func tell(message string, flags uintptr) {
 	messageBox.Call(0, uintptr(unsafe.Pointer(body)), uintptr(unsafe.Pointer(title)), flags)
 }
 
-// progress shows a small borderless status window while files are written.
-type progress struct{ window uintptr }
-
-func showProgress(message string) *progress {
-	if silent {
-		return &progress{}
-	}
-	class, _ := syscall.UTF16PtrFromString("STATIC")
-	body, _ := syscall.UTF16PtrFromString(message)
-	width, height := uintptr(420), uintptr(90)
-	screenWidth, _, _ := systemMetrics.Call(0)
-	screenHeight, _, _ := systemMetrics.Call(1)
-	const style = 0x80000000 | 0x10000000 | 0x00800000 | 0x1 | 0x200 // popup, visible, border, center, centerimage
-	window, _, _ := createWindow.Call(0x8|0x80, uintptr(unsafe.Pointer(class)), uintptr(unsafe.Pointer(body)), style,
-		(screenWidth-width)/2, (screenHeight-height)/2, width, height, 0, 0, 0, 0)
-	p := &progress{window: window}
-	p.pump()
-	return p
-}
-
-func (p *progress) set(message string) {
-	if p.window == 0 {
-		return
-	}
-	body, _ := syscall.UTF16PtrFromString(message)
-	setWindowText.Call(p.window, uintptr(unsafe.Pointer(body)))
-	p.pump()
-}
-
-func (p *progress) pump() {
-	var msg [48]byte
-	for {
-		found, _, _ := peekMessage.Call(uintptr(unsafe.Pointer(&msg[0])), 0, 0, 0, 1)
-		if found == 0 {
-			return
-		}
-		translateMessage.Call(uintptr(unsafe.Pointer(&msg[0])))
-		dispatchMessage.Call(uintptr(unsafe.Pointer(&msg[0])))
-	}
-}
-
-func (p *progress) close() {
-	if p.window != 0 {
-		destroyWindow.Call(p.window)
-		p.window = 0
-	}
+// showProgress keeps a responsive status window on a dedicated UI thread while files are written.
+func showProgress(message string) *asyncProgress {
+	return showAsyncProgress(message)
 }
 
 type payload struct {
@@ -368,37 +324,55 @@ func install(self, directory, version string, shell shellIntegration) error {
 }
 
 func installTo(self, directory, version string, shell shellIntegration, options installOptions) error {
+	_, err := installToGuided(self, directory, version, shell, options, true, nil)
+	return err
+}
+
+func installToGuided(self, directory, version string, shell shellIntegration, options installOptions, confirmFirst bool, onProgress func(int, string)) (bool, error) {
 	old, _, err := inspectDirectory(directory, true)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := options.checkTarget(directory, old); err != nil {
-		return err
+		return false, err
 	}
 	data, err := readPayload(self)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer data.file.Close()
-	if !ask(text(fmt.Sprintf("安装 %s %s 到：\n%s\n\n已有的配对和设置会保留。", appName, version, directory),
+	if confirmFirst && !ask(text(fmt.Sprintf("安装 %s %s 到：\n%s\n\n已有的配对和设置会保留。", appName, version, directory),
 		fmt.Sprintf("Install %s %s to:\n%s\n\nExisting pairing and settings are kept.", appName, version, directory)), mbIconInfo) {
-		return nil
+		return false, nil
 	}
 	if proceed, err := waitUntilClosed(directory); !proceed {
-		return err
+		return false, err
 	}
-	window := showProgress(text("正在安装 Grok Bot Local…", "Installing Grok Bot Local…"))
-	defer window.close()
+	var window *asyncProgress
+	if onProgress == nil {
+		window = showProgress(text("正在安装 Grok Bot Local…", "Installing Grok Bot Local…"))
+		defer window.close()
+	}
+	reportProgress := func(pct int, msg string) {
+		if onProgress != nil {
+			onProgress(pct, msg)
+		} else if window != nil {
+			window.set(msg)
+		}
+	}
 	var size uint64
 	err = transactInstallation(directory, func(stage string) error {
 		size, err = extract(data, stage, func(done, total int) {
 			if done%8 == 0 || done == total {
-				window.set(text(fmt.Sprintf("正在安装 Grok Bot Local… %d%%", done*100/total), fmt.Sprintf("Installing Grok Bot Local… %d%%", done*100/total)))
+				pct := done * 75 / total
+				msg := text(fmt.Sprintf("正在安装 Grok Bot Local… %d%%", done*100/total), fmt.Sprintf("Installing Grok Bot Local… %d%%", done*100/total))
+				reportProgress(pct, msg)
 			}
 		})
 		if err != nil {
 			return err
 		}
+		reportProgress(78, text("正在校验并写入安装文件…", "Verifying and writing files…"))
 		stub, err := os.OpenFile(filepath.Join(stage, uninstaller), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0755)
 		if err != nil {
 			return err
@@ -409,26 +383,33 @@ func installTo(self, directory, version string, shell shellIntegration, options 
 		if sideBySide {
 			return nil // Preserve the baseline installer registration and shortcuts.
 		}
-		window.set(text("正在创建快捷方式…", "Creating shortcuts…"))
-		if err := shell.install(directory, version, size, !upgrade); err != nil {
+		reportProgress(90, text("正在创建快捷方式…", "Creating shortcuts…"))
+		desktop := !upgrade
+		if options.desktopShortcut != nil {
+			desktop = *options.desktopShortcut
+		}
+		if err := shell.install(directory, version, size, desktop); err != nil {
 			return fmt.Errorf("Windows registration or shortcuts may be incomplete: %w", err)
 		}
 		return nil
 	}, options)
 	if err != nil {
-		return err
+		return false, err
+	}
+	if onProgress != nil {
+		return true, nil
 	}
 	window.close()
 	if options.legacy != "" || (old != nil && old.LegacyFrom != "") {
 		tell(fmt.Sprintf(text("并行安装完成。请先退出另一版本，再打开：\n%s\n配对和设置沿用原配置。", "Side-by-side installation complete. Quit the other version, then open:\n%s\nExisting pairing and settings are shared."), filepath.Join(directory, exeName)), mbOK|mbIconInfo)
-		return nil
+		return true, nil
 	}
 	if !silent && ask(text("安装完成。现在打开 Grok Bot Local？", "Installation complete. Open Grok Bot Local now?"), mbIconInfo) {
 		command := exec.Command(filepath.Join(directory, exeName))
 		command.Dir = directory
 		command.Start()
 	}
-	return nil
+	return true, nil
 }
 
 // registryString reads a REG_SZ value below HKCU as UTF-16; reg.exe output uses the
@@ -569,7 +550,11 @@ func main() {
 			}
 			data.file.Close()
 		}
-		err = installEntry(self, filepath.Clean(directory), version, windowsShell, migrate)
+		if !silent && !migrate {
+			err = runInstallWizard(self, filepath.Clean(directory), version, windowsShell, false)
+		} else {
+			err = installEntry(self, filepath.Clean(directory), version, windowsShell, migrate)
+		}
 	} else if migrate {
 		err = errors.New("--migrate-legacy requires an installer, not an uninstaller")
 	} else {

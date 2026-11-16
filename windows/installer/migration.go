@@ -40,7 +40,10 @@ func (e legacyInstallation) Error() string {
 		"Legacy installation has no ownership receipt; it will not be replaced or uninstalled: %s\nNew directory: %s\nQuit the old client, then run the new setup with: --migrate-legacy \"/D=%s\""), dir, siblingDirectory(dir), dir)
 }
 
-type installOptions struct{ legacy string }
+type installOptions struct {
+	legacy          string
+	desktopShortcut *bool
+}
 
 func installEntry(self, dir, version string, shell shellIntegration, migrate bool) error {
 	if !migrate {
