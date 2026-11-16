@@ -15,7 +15,13 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-data class Connection(val server: String, val deviceId: String, val token: String)
+data class Connection @JvmOverloads constructor(
+    val server: String,
+    val deviceId: String,
+    val token: String,
+    val tailcat: Boolean = false,
+    val networkIdentity: String? = null,
+)
 
 /** Pairing record. The device credential is sealed with a key that never leaves the Android keystore. */
 class ConnectionStore(context: Context) {
@@ -35,19 +41,25 @@ class ConnectionStore(context: Context) {
         val server = prefs.getString("server", null) ?: return null
         val deviceId = prefs.getString("deviceId", null) ?: return null
         val sealed = prefs.getString("token", null) ?: return null
-        return Connection(server, deviceId, open(sealed))
+        val tailcat = prefs.getBoolean("tailcat", false)
+        val networkIdentity = prefs.getString("networkIdentity", null)?.let { open(it) }
+        return Connection(server, deviceId, open(sealed), tailcat = tailcat, networkIdentity = networkIdentity)
     }
 
     @Synchronized
     fun save(connection: Connection) {
-        check(prefs.edit()
+        val editor = prefs.edit()
             .putString("server", connection.server)
             .putString("deviceId", connection.deviceId)
             .putString("token", seal(connection.token))
-            .remove("notificationCursor")
+            .putBoolean("tailcat", connection.tailcat)
+            .remove(KEY_CURSOR)
+            .remove(KEY_SEEN_IDS)
             .remove("notificationCursorTime")
             .remove("notificationCursorIds")
-            .commit()) { "Could not save the connection" }
+        if (connection.networkIdentity != null) editor.putString("networkIdentity", seal(connection.networkIdentity))
+        else editor.remove("networkIdentity")
+        check(editor.commit()) { "Could not save the connection" }
     }
 
     @Synchronized
@@ -56,29 +68,104 @@ class ConnectionStore(context: Context) {
     }
 
     val notificationCursor: String?
-        get() = prefs.getString("notificationCursor", null)
+        get() = prefs.getString(KEY_CURSOR, null)
 
     @Synchronized
     fun seedNotifications(deviceId: String, items: JSONArray) {
         if (prefs.getString("deviceId", null) != deviceId) return
-        val last = items.optJSONObject(items.length() - 1)
-        val time = last?.optString("createdAt").orEmpty()
-        val ids = (0 until items.length()).mapNotNull { items.optJSONObject(it) }
-            .filter { it.optString("createdAt") == time }.map { it.optString("id") }.toSet()
-        prefs.edit().putString("notificationCursorTime", time).putStringSet("notificationCursorIds", ids)
-            .putString("notificationCursor", last?.optString("id").orEmpty()).apply()
+        val seen = loadSeenIds()
+        var lastId = prefs.getString(KEY_CURSOR, null).orEmpty()
+        for (index in 0 until items.length()) {
+            val id = items.optJSONObject(index)?.optString("id").orEmpty()
+            if (id.isNotEmpty()) {
+                seen.remove(id)
+                seen.add(id)
+                lastId = id
+            }
+        }
+        trimSeenIds(seen)
+        val encoded = JSONArray()
+        for (seenId in seen) encoded.put(seenId)
+        prefs.edit()
+            .putString(KEY_SEEN_IDS, encoded.toString())
+            .putString(KEY_CURSOR, lastId)
+            .remove("notificationCursorTime")
+            .remove("notificationCursorIds")
+            .commit()
     }
 
     @Synchronized
-    fun acceptNotification(deviceId: String, id: String, time: String): Boolean {
-        if (id.isEmpty() || time.isEmpty() || prefs.getString("deviceId", null) != deviceId) return false
-        val seen = prefs.getString("notificationCursorTime", "").orEmpty()
-        if (time < seen) return false
-        val ids = if (time == seen) prefs.getStringSet("notificationCursorIds", setOf(notificationCursor.orEmpty())).orEmpty() else emptySet()
-        if (id in ids) return false
-        prefs.edit().putString("notificationCursorTime", time).putStringSet("notificationCursorIds", ids + id)
-            .putString("notificationCursor", id).apply()
+    @JvmOverloads
+    fun acceptNotification(
+        deviceId: String,
+        id: String,
+        time: String = "",
+        updateCursor: Boolean = true,
+    ): Boolean {
+        if (id.isEmpty() || prefs.getString("deviceId", null) != deviceId) return false
+        val seen = loadSeenIds()
+        if (!seen.add(id)) {
+            if (updateCursor) {
+                val currentCursor = prefs.getString(KEY_CURSOR, null).orEmpty()
+                if (currentCursor != id && shouldAdvanceCursor(seen, currentCursor, id)) {
+                    prefs.edit().putString(KEY_CURSOR, id).commit()
+                }
+            }
+            return false
+        }
+        trimSeenIds(seen)
+        val encoded = JSONArray()
+        for (seenId in seen) encoded.put(seenId)
+        val editor = prefs.edit()
+            .putString(KEY_SEEN_IDS, encoded.toString())
+            .remove("notificationCursorTime")
+            .remove("notificationCursorIds")
+        if (updateCursor) editor.putString(KEY_CURSOR, id)
+        editor.commit()
         return true
+    }
+
+    private fun shouldAdvanceCursor(seen: LinkedHashSet<String>, currentCursor: String, candidate: String): Boolean {
+        if (currentCursor.isEmpty()) return true
+        var cursorPos = -1
+        var candidatePos = -1
+        var idx = 0
+        for (item in seen) {
+            if (item == currentCursor) cursorPos = idx
+            if (item == candidate) candidatePos = idx
+            idx++
+        }
+        return cursorPos < 0 || candidatePos > cursorPos
+    }
+
+    private fun loadSeenIds(): LinkedHashSet<String> {
+        val seen = LinkedHashSet<String>()
+        val encoded = prefs.getString(KEY_SEEN_IDS, null)
+        if (encoded != null) {
+            val arr = try { JSONArray(encoded) } catch (_: Exception) { null }
+            if (arr != null) {
+                for (index in 0 until arr.length()) {
+                    val value = arr.optString(index)
+                    if (value.isNotEmpty()) seen.add(value)
+                }
+                trimSeenIds(seen)
+                return seen
+            }
+        }
+        prefs.getStringSet("notificationCursorIds", null)?.forEach {
+            if (it.isNotEmpty()) seen.add(it)
+        }
+        prefs.getString(KEY_CURSOR, null)?.takeIf { it.isNotEmpty() }?.let { seen.add(it) }
+        trimSeenIds(seen)
+        return seen
+    }
+
+    private fun trimSeenIds(seen: LinkedHashSet<String>) {
+        val iterator = seen.iterator()
+        while (seen.size > MAX_SEEN_IDS && iterator.hasNext()) {
+            iterator.next()
+            iterator.remove()
+        }
     }
 
     private fun key(): SecretKey {
@@ -111,6 +198,9 @@ class ConnectionStore(context: Context) {
 
     private companion object {
         const val ALIAS = "grokbot-device-credential"
+        const val KEY_CURSOR = "notificationCursor"
+        const val KEY_SEEN_IDS = "notificationSeenIds"
+        const val MAX_SEEN_IDS = 256
     }
 }
 

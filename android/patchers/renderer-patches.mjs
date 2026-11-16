@@ -52,6 +52,17 @@ export const RENDERER_PATCHES = [
         '"--grokbot-anchor-top":"anchor(top)","--grokbot-anchor-left":"anchor(left)","--grokbot-anchor-width":"anchor-size(width)","--grokbot-anchor-height":"anchor-size(height)"},'],
     ],
   },
+  {
+    file: 'assets/chunk-view-BZxQ9Ylk.js',
+    input: 'windows-recipe',
+    sha256: 'a5423ee6ba0b931a43e8e1d59c36f669ddf8b787242e5080193ef46562cc44e5',
+    edits: [
+      // Recipe 009 leaves GrokOriginalUpdateSettings dormant behind `ie()`. Enable it
+      // whenever the Android shell was built with an auto-update manifest & public key.
+      ['function re(){re.d=1588;const t=M.c(1);let e;return t[0]===Symbol.for("react.memo_cache_sentinel")?(e=o.jsx(ue,{children:o.jsx(ie,{})}),t[0]=e):e=t[0],e}',
+      'function re(){re.d=1588;const t=M.c(1);let e;return t[0]===Symbol.for("react.memo_cache_sentinel")?(e=o.jsx(ue,{children:globalThis.__grokbotAndroidBoot?.updateStatus?.delivery==="in-app"?o.jsx(GrokOriginalUpdateSettings,{}):o.jsx(ie,{})}),t[0]=e):e=t[0],e}'],
+    ],
+  },
 ];
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');

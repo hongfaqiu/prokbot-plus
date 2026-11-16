@@ -399,6 +399,9 @@ test('only computer view pages of the paired Host load in the webview frame', ()
   assert.equal(mapDesktopSource('http://host.test:18080/api/listAgents', options), null);
   assert.equal(mapDesktopSource('http://elsewhere.test/vnc/desktop/vnc.html', options), null);
   assert.equal(mapDesktopSource('javascript:alert(1)', options), null);
+  const tailcatOptions = { ...options, hostOrigin: () => 'tailcat://connect/tcExample?port=8000', tailcat: () => true };
+  assert.equal(new URL(mapDesktopSource('http://127.0.0.1:41234/vnc/desktop/vnc.html', tailcatOptions)).origin, options.vncOrigin);
+  assert.equal(mapDesktopSource('https://127.0.0.1:41234/vnc/desktop/vnc.html', tailcatOptions), null);
 });
 
 test('server-sent events are parsed across chunk boundaries', async () => {

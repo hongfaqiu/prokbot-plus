@@ -8,17 +8,25 @@ main{max-width:440px;margin:0 auto;padding:40px 24px 32px}
 h1{font-size:26px;font-weight:650;letter-spacing:0;margin:0 0 8px}
 .lead{color:var(--muted);margin:0 0 24px;line-height:1.5;font-size:15px}
 label{display:block;margin:20px 0 8px;font-weight:550;font-size:15px}
-input[type=url],input[type=text]{width:100%;padding:14px 15px;border:1px solid var(--line);border-radius:12px;background:var(--field);color:var(--fg);font:inherit;outline:none}
-input:focus{border-color:var(--muted)}
+input[type=url],input[type=text],input[type=password],select{width:100%;padding:14px 15px;border:1px solid var(--line);border-radius:12px;background:var(--field);color:var(--fg);font:inherit;outline:none}
+input:focus,select:focus{border-color:var(--muted)}
 #key{letter-spacing:.3em;text-transform:uppercase;font-variant-numeric:tabular-nums}
 #key:placeholder-shown{letter-spacing:normal;text-transform:none}
 .actions{display:flex;justify-content:flex-end;gap:12px;flex-wrap:wrap}
 button{border:0;border-radius:22px;padding:12px 26px;font:600 15px system-ui,sans-serif;background:var(--button);color:var(--button-fg);min-height:44px}
 button.secondary{background:var(--secondary);color:var(--secondary-fg)}
+button.small{padding:9px 14px;min-height:36px;font-size:13px;border-radius:18px}
 button:disabled{opacity:.5}
 #status{min-height:24px;color:var(--error);font-size:14px;margin:16px 0;line-height:1.5}
 #status.ok{color:var(--muted)}
-#paired{margin-top:28px;padding-top:20px;border-top:1px solid var(--line)}
+#paired,#updates{margin-top:24px;padding-top:20px;border-top:1px solid var(--line)}
 .switch{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:0 0 6px}
+.tailcat-toggle{margin:8px 0 4px}
 .switch input{width:22px;height:22px;accent-color:currentColor}
 .hint{color:var(--muted);font-size:13px;line-height:1.5;margin:0 0 20px}
+.hint.compact{margin:8px 0 12px}
+.pill-row{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}
+.subcard{padding:14px 16px;border:1px solid var(--line);border-radius:14px;background:var(--field);margin:0 0 18px}
+.subcard label{margin:12px 0 6px;font-size:14px}
+.subcard label:first-child{margin-top:0}
+.row-between{display:flex;align-items:center;justify-content:space-between;gap:12px}

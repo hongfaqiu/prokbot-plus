@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { applyReleaseRecipes } from './release-recipes.mjs';
 import { extractNotificationPolicy } from './extract-policy.mjs';
 import { acquireDesktopSource } from './download-original.mjs';
+import { patchDesktopUpdateSettingsUi, resolveDesktopUpdateConfig } from './update-config.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../..');
@@ -19,9 +20,12 @@ const timings = {};
 const args = process.argv.slice(2);
 const arg = name => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : null; };
 if (args.includes('--help')) {
-  console.log('node patchers/desktop/patch.mjs [--source <原版.app或.dmg>] [--output <新.app>] [--backup <原版备份.app>] [--identity <auto|证书名称或SHA1|->] [--verify-only]\n省略 --source 时自动下载指定版本原版。');
+  console.log(`node patchers/desktop/patch.mjs [--source <原版.app或.dmg>] [--output <新.app>] [--backup <原版备份.app>] [--identity <auto|证书名称或SHA1|->] [--update-url <URL> (--update-public-key <SPKI Base64|PEM> | --update-public-key-file <文件>)] [--verify-only]
+省略 --source 时自动下载指定版本原版。
+--update-url / --update-public-key / --update-public-key-file 为客户端启用签名验证的自动更新。`);
   process.exit(0);
 }
+const updateConfig = await resolveDesktopUpdateConfig(args);
 if (process.platform !== 'darwin') throw new Error('macOS App 构建与签名必须在 macOS 上进行。');
 let source;
 const output = path.resolve(arg('--output') ?? path.join(root, 'output.noindex/Grok Bot.app'));
@@ -88,6 +92,7 @@ try {
   if (pkg.version !== supported.version) throw new Error('ASAR 包版本不一致。');
   const patchStarted = performance.now();
   await applyReleaseRecipes(unpacked, path.join(here, 'recipes'));
+  await patchDesktopUpdateSettingsUi(unpacked);
   timings.patchSeconds = Number(((performance.now() - patchStarted) / 1000).toFixed(3));
   console.log(JSON.stringify({ verified: true, recipesVerified: true, version: supported.version, architecture: supported.architecture, asarSha256 }));
   if (!args.includes('--verify-only')) {
@@ -160,6 +165,9 @@ try {
       computerHelper = { available: true, ...await patchNativeHelperTeam(
         path.join(output, 'Contents/Helpers/Grok Bot Computer Use.app/Contents/MacOS/CUGrokBotService'), teamId) };
     }
+    if (updateConfig) {
+      await writeFile(path.join(outResources, 'grokbot-local-update.json'), JSON.stringify(updateConfig, null, 2) + '\n');
+    }
     run('xattr', ['-cr', output]);
     // --deep does not cover every library under Electron's Framework/Libraries
     // directory. Sign each native binary first so hardened-runtime library
@@ -177,7 +185,7 @@ try {
       bundleId: info.CFBundleIdentifier, signature: signingKind, iconUnchanged,
       originalFrameworkSha256: frameworkSha256, originalUnchanged: true,
       originalWindow: { frame: true, titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 15 } },
-      profile: '~/Library/Application Support/Grok Bot Local', automaticUpdates: false, computerHelper,
+      profile: '~/Library/Application Support/Grok Bot Local', automaticUpdates: Boolean(updateConfig), ...(updateConfig ?? {}), computerHelper,
       timings: { ...timings, totalSeconds: Number(((performance.now() - startedAt) / 1000).toFixed(3)) } };
     await writeFile(`${output}.patch.json`, JSON.stringify(manifest, null, 2));
     console.log(JSON.stringify(manifest, null, 2));

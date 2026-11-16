@@ -11,6 +11,7 @@ services:
       GROKBOT_BOX_HOST: box
       GROKBOT_VNC_URL: http://box:6080
       GROKBOT_FORK_VNC_URL: http://box:6081
+      SAND_BOX_MAX_WINDOWS: ${SAND_BOX_MAX_WINDOWS:-100}
       TZ: ${TZ:-Asia/Singapore}
     volumes:
       - host-data:/data
@@ -24,7 +25,8 @@ services:
     image: ${GROKBOT_BOX_IMAGE:-grokbot-box-input:9d2ac1b}
     platform: linux/amd64
     restart: unless-stopped
-    shm_size: 1gb
+    shm_size: ${GROKBOT_BOX_SHM_SIZE:-1gb}
+    mem_limit: ${GROKBOT_BOX_MEM_LIMIT:-0}
     volumes:
       - box-home:/home/box
       - box-workspace:/workspace

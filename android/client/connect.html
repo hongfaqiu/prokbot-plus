@@ -4,6 +4,7 @@
 <title>Grok Bot</title><link rel="stylesheet" href="connect.css"></head>
 <body><main><img class="icon" src="icon.png" alt=""><p id="edition"></p><h1></h1><p class="lead"></p>
 <form id="form" novalidate>
+<label class="switch tailcat-toggle"><span id="tailcat-label">Tailcat</span><input id="tailcat" type="checkbox"></label>
 <label for="server"></label><input id="server" type="url" inputmode="url" placeholder="https://bot.example.com" required autocomplete="url" autocapitalize="off" spellcheck="false">
 <label for="key"></label><input id="key" type="text" inputmode="text" autocapitalize="characters" autocomplete="one-time-code" autocorrect="off" spellcheck="false">
 <p id="status" role="status" aria-live="polite"></p>
@@ -12,7 +13,58 @@
 <section id="paired" hidden>
 <label class="switch"><span id="background-label"></span><input id="background" type="checkbox" role="switch"></label>
 <p class="hint" id="background-hint"></p>
+<div class="pill-row">
+  <button id="perm-btn" type="button" class="secondary small"></button>
+  <button id="battery-btn" type="button" class="secondary small"></button>
+</div>
+<div class="subcard" id="push-box">
+  <label for="push-provider" id="push-provider-label"></label>
+  <select id="push-provider">
+    <option value="none"></option>
+    <option value="unifiedpush"></option>
+    <option value="ntfy"></option>
+    <option value="webhook"></option>
+    <option value="fcm"></option>
+  </select>
+  <div id="push-up-fields" hidden>
+    <label for="up-distributor" id="up-distributor-label"></label>
+    <select id="up-distributor"></select>
+    <p class="hint compact" id="up-hint"></p>
+  </div>
+  <div id="push-ntfy-fields" hidden>
+    <label for="ntfy-url" id="ntfy-url-label"></label>
+    <input id="ntfy-url" type="url" placeholder="https://ntfy.sh/grokbot-topic" autocapitalize="off" spellcheck="false">
+    <label for="ntfy-token" id="ntfy-token-label"></label>
+    <input id="ntfy-token" type="password" placeholder="Optional Bearer token" autocomplete="off">
+  </div>
+  <div id="push-webhook-fields" hidden>
+    <label for="webhook-url" id="webhook-url-label"></label>
+    <input id="webhook-url" type="url" placeholder="https://hooks.example.com/grokbot" autocapitalize="off" spellcheck="false">
+    <label for="webhook-secret" id="webhook-secret-label"></label>
+    <input id="webhook-secret" type="password" placeholder="Optional secret" autocomplete="off">
+  </div>
+  <div id="push-fcm-fields" hidden>
+    <label for="fcm-token" id="fcm-token-label"></label>
+    <input id="fcm-token" type="text" autocapitalize="off" spellcheck="false">
+    <p class="hint compact" id="fcm-hint"></p>
+  </div>
+  <p class="hint compact" id="push-state-text"></p>
+  <div class="actions">
+    <button id="push-save" type="button" class="secondary"></button>
+    <button id="push-test" type="button" class="secondary"></button>
+  </div>
+</div>
 <div class="actions"><button id="disconnect" type="button" class="secondary"></button><button id="workspace" type="button"></button></div>
+</section>
+<section id="updates" hidden>
+  <div class="subcard">
+    <div class="row-between"><strong id="update-title"></strong><span id="update-version" class="hint compact"></span></div>
+    <p class="hint compact" id="update-state-text"></p>
+    <div class="actions">
+      <button id="update-check" type="button" class="secondary"></button>
+      <button id="update-install" type="button" hidden></button>
+    </div>
+  </div>
 </section>
 </main>
 <script src="boot-data.js"></script>

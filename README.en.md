@@ -12,7 +12,7 @@ Windows, macOS and iOS patches | [Independently developed Android app (unofficia
   <a href="#client-versions"><img alt="Windows patch accepts only 0.71.2 x64" src="https://img.shields.io/badge/Windows%20patch%20accepts%20only-0.71.2%20x64-237E55?logo=windows&logoColor=white"></a>
   <a href="#client-versions"><img alt="macOS official 1.1.0 ARM64" src="https://img.shields.io/badge/macOS%20official-1.1.0%20ARM64-111111?logo=apple&logoColor=white"></a>
   <a href="#client-versions"><img alt="iOS official 1.25.0" src="https://img.shields.io/badge/iOS%20official-1.25.0-111111?logo=apple&logoColor=white"></a>
-  <a href="#client-versions"><img alt="Android shell 1.1.0" src="https://img.shields.io/badge/Unofficial%20Android-1.1.0-237E55?logo=android&logoColor=white"></a>
+  <a href="#client-versions"><img alt="Android shell 1.2.0" src="https://img.shields.io/badge/Unofficial%20Android-1.2.0-237E55?logo=android&logoColor=white"></a>
 <!-- client-badges:end -->
   <img alt="Host d0a4baa" src="https://img.shields.io/badge/Host-d0a4baa-2496ED?logo=docker&logoColor=white">
   <img alt="Noncommercial License" src="https://img.shields.io/badge/License-Noncommercial-6B7280">
@@ -32,7 +32,7 @@ Windows, macOS and iOS patches | [Independently developed Android app (unofficia
 | Windows x64 | [1.1.0](https://api2.cursor.sh/updates/api/download/stable/win32-x64-user/sand) (installer rejected during input verification; no native chat test) | 0.71.2 |
 | macOS ARM64 | [1.1.0](https://api2.cursor.sh/updates/api/download/stable/darwin-arm64/sand) | 0.71.2; no Mac hardware test |
 | iOS | [1.25.0](https://apps.apple.com/us/app/grok-bot/id6794501026) | 1.16.0 (23152); no iPhone or iPad hardware test |
-| Android 9+ (unofficial) | Does not use the official Android APK | Shell **1.1.0** (build 10100), renderer from Windows **0.71.2** |
+| Android 9+ (unofficial) | Does not use the official Android APK | Shell **1.2.0** (build 10200), renderer from Windows **0.71.2** |
 | Linux Host / execution desktop | No published mapping to the latest desktop release | Host `d0a4baa`; execution desktop `9d2ac1b` (amd64) |
 
 [Latest ProkBot Plus release](https://github.com/ferretgeek/prokbot-plus/releases/latest) uses the project’s own version number. The upstream ProkBot baseline is `3e9fe8c`.

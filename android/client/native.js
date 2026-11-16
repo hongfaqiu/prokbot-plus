@@ -2,11 +2,12 @@
 // (`/__native/*`); embedded frames have other origins and are refused.
 export const boot = globalThis.__grokbotAndroidBoot ?? {};
 
-export async function native(name, body = {}, { binary } = {}) {
+export async function native(name, body = {}, { binary, signal } = {}) {
   const response = await fetch(`/__native/${name}`, {
     method: 'POST', credentials: 'same-origin', cache: 'no-store',
     headers: { 'content-type': binary ? 'application/octet-stream' : 'application/json' },
     body: binary ?? JSON.stringify(body),
+    ...(signal ? { signal } : {}),
   });
   const value = await response.json().catch(() => null);
   if (!response.ok || value?.ok === false || !value) throw new Error(value?.error ?? `Invalid native response (HTTP ${response.status})`);

@@ -13,6 +13,7 @@ import os from 'node:os';
 import { applyReleaseRecipes } from '../../../mac/patchers/desktop/release-recipes.mjs';
 import { extractNotificationPolicy } from '../../../mac/patchers/desktop/extract-policy.mjs';
 import { acquireDesktopSource } from '../../../mac/patchers/desktop/download-original.mjs';
+import { patchDesktopUpdateSettingsUi, resolveDesktopUpdateConfig } from '../../../mac/patchers/desktop/update-config.mjs';
 import { applicationIcon, replaceAsarIntegrity, stripAuthenticode } from './pe.mjs';
 import { unpackOriginal } from './original.mjs';
 import { withInstallerDiagnostic } from './input-diagnostic.mjs';
@@ -28,11 +29,13 @@ const APP = 'Grok Bot Local', EXE = 'Grok Bot.exe';
 const args = process.argv.slice(2);
 const arg = name => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : null; };
 if (args.includes('--help')) {
-  console.log(`node windows/patchers/desktop/patch.mjs [--source <Grok_Bot_${supported.version}_Setup.exe | app-64.7z | 安装目录>] [--output <目录>] [--no-installer] [--verify-only]
-省略 --source 时自动下载并校验 ${supported.version} Windows x64 原版。默认输出到 windows/output/。`);
+  console.log(`node windows/patchers/desktop/patch.mjs [--source <Grok_Bot_${supported.version}_Setup.exe | app-64.7z | 安装目录>] [--output <目录>] [--update-url <URL> (--update-public-key <SPKI Base64|PEM> | --update-public-key-file <文件>)] [--no-installer] [--verify-only] [--allow-cross-platform]
+省略 --source 时自动下载并校验 ${supported.version} Windows x64 原版。默认输出到 windows/output/。
+--update-url / --update-public-key / --update-public-key-file 为客户端启用签名验证的自动更新。`);
   process.exit(0);
 }
-if (process.platform !== 'win32') throw new Error('Windows 客户端需要在 Windows 上生成。');
+const updateConfig = await resolveDesktopUpdateConfig(args);
+if (!args.includes('--verify-only') && !args.includes('--allow-cross-platform') && process.platform !== 'win32') throw new Error('Windows 客户端需要在 Windows 上生成。');
 const startedAt = performance.now();
 const outputRoot = path.resolve(arg('--output') ?? path.join(windowsRoot, 'output'));
 const appOutput = path.join(outputRoot, APP);
@@ -82,6 +85,7 @@ async function build() {
   if (sha(asar.getRawHeader(originalAsar).headerString) !== supported.asarHeaderSha256) throw new Error('ASAR header fingerprint mismatch');
   const patchStarted = performance.now();
   await applyReleaseRecipes(unpacked, path.join(here, 'recipes'));
+  await patchDesktopUpdateSettingsUi(unpacked);
   const patchSeconds = Number(((performance.now() - patchStarted) / 1000).toFixed(3));
   console.log(JSON.stringify({ verified: true, recipesVerified: true, version: supported.version, architecture: supported.architecture, asarSha256 }));
   if (args.includes('--verify-only')) return;
@@ -126,11 +130,14 @@ async function build() {
   await cp(path.join(repo, 'mac/network/TAILCAT-LICENSE'), path.join(stagedApp, 'resources/TAILCAT-LICENSE'));
   if (await hashFile(originalAsar) !== asarSha256) throw new Error('原版文件意外变化。');
 
+  if (updateConfig) {
+    await writeFile(path.join(stagedApp, 'resources/grokbot-local-update.json'), JSON.stringify(updateConfig, null, 2) + '\n');
+  }
   const manifest = { patchedAt: new Date().toISOString(), version: supported.version,
     architecture: supported.architecture, originalAsarSha256: asarSha256, patchedAsarSha256: await hashFile(outAsar),
     asarHeaderSha256: headerSha256, originalEntry: previousMain, patchedEntry: pkg.main, appUserModelId: 'dev.grokbot.local',
     executable: { originalSha256: exeSha256, patchedSha256: sha(exe), signature: 'removed' },
-    profile: '%APPDATA%\\Grok Bot Local', automaticUpdates: false, computerUse: 'unavailable on Windows',
+    profile: '%APPDATA%\\Grok Bot Local', automaticUpdates: Boolean(updateConfig), ...(updateConfig ?? {}), computerUse: 'unavailable on Windows',
     unpackedFiles: patchedUnpacked.size, timings: { patchSeconds } };
   await writeFile(path.join(stagedApp, 'resources/grokbot-local.patch.json'), JSON.stringify(manifest, null, 2));
   Object.assign(manifest, { source, output: appOutput }); // Machine paths belong only in the local build report.

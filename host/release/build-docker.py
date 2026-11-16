@@ -52,11 +52,12 @@ def load_verified_archive(path):
 def prepare_box(box_archive):
     if box_archive:
         source = load_verified_archive(box_archive.resolve())
-    else:
-        source = next((ref for ref in (BOX, BOX_TAG, BOX_ID) if image_id(ref) in BOX_IDENTITIES), None)
-        if not source:
-            run('docker', 'pull', '--platform', BOX_SPEC['platform'], BOX)
-            source = BOX
+        run('docker', 'tag', source, BOX_TAG)
+        return BOX_ID
+    source = next((ref for ref in (BOX, BOX_TAG, BOX_ID) if image_id(ref) in BOX_IDENTITIES), None)
+    if not source:
+        run('docker', 'pull', '--platform', BOX_SPEC['platform'], BOX)
+        source = BOX
     identity = image_id(source)
     if identity not in BOX_IDENTITIES:
         raise ValueError('Unsupported Box image identity')

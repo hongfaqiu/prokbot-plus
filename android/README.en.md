@@ -13,7 +13,7 @@ The official Android app (`ai.x.grok.bot` 1.16.0) carries Google Play tamper pro
 - The interface is the official **desktop** interface, the same one as in the Windows and Mac clients, taken from your own download of the official Windows 0.71.2 installer.
 - It runs inside an Android shell written for this project (`shell/`), which connects to the Host and handles credentials, notifications, files, the back gesture and other phone features.
 
-Android installs the **project's shell**, `dev.grokbot.local`: `versionName` **1.1.0**, `versionCode` **10100**. The Windows renderer remains pinned to **0.71.2**. A shell release does not add support for a newer renderer or change the installed app's identity.
+Android installs the **project's shell**, `dev.grokbot.local`: `versionName` **1.2.0**, `versionCode` **10200**. The Windows renderer remains pinned to **0.71.2**. A shell release does not add support for a newer renderer or change the installed app's identity.
 
 ## Usage
 
@@ -27,8 +27,8 @@ The tool downloads and verifies the official `Grok_Bot_0.71.2_Setup.exe` (the sa
 
 | Output | Purpose |
 | --- | --- |
-| `GrokBotLocal-1.1.0-android.apk` | Install it on the phone; the filename uses the shell version |
-| `GrokBotLocal-1.1.0-android.patch.json` | Build record: shell and renderer versions, input digests, APK digest and signing certificate fingerprint |
+| `GrokBotLocal-1.2.0-android.apk` | Install it on the phone; the filename uses the shell version |
+| `GrokBotLocal-1.2.0-android.patch.json` | Build record: shell and renderer versions, input digests, APK digest and signing certificate fingerprint |
 
 The verification report, the patch record and `assets/web/client/build.json` inside the APK use `shell.versionName`, `shell.versionCode` and `rendererVersion` instead of the old ambiguous `version` field. Before writing the outputs, the patcher checks the signed APK's compiled manifest and embedded build record against the pins.
 
@@ -42,6 +42,8 @@ Copy the APK to the phone and install it (allow "Install unknown apps"), or use 
 | `--shell <file>` | Use another copy of the reviewed shell; its SHA-256, package name and both version fields must match |
 | `--output <folder>` | Output folder, `android/output/` by default |
 | `--signing-key <file>` | Signing key file, `~/.grokbot-local/android-signing.json` by default |
+| `--unsigned` | Emit an aligned unsigned APK so `android/patchers/release-sign.mjs` can sign and publish on the release signing server |
+| `--update-url <URL>` / `--update-public-key <Base64>` | Embed auto-update feed URL and ECDSA P-256 SPKI public key (must be supplied together) |
 | `--force` | Overwrite existing output |
 | `--verify-only` | Check the inputs and shell, replay the Windows recipes, then validate the Android entry, bridge injection, CSP, preloads and pinned renderer edits in a temporary directory. No output APK, patch record or signing-key access |
 

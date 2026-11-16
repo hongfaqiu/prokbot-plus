@@ -504,11 +504,60 @@ export function createServices(context) {
     claimEgressTunnel: () => undefined,
     // The desktop's on-disk transcript cache answers null while it is not in use; there is none here.
     readTranscriptStoreTail: () => null,
-    getUpdateStatus: () => ({
-      state: { type: 'disabled', reason: 'disabled-by-env' }, currentVersion: androidBoot.appVersion ?? '',
-      currentTrack: 'stable', availableTracks: ['stable'], isTrackManagedByPolicy: true,
-      delivery: 'package-manager', isBelowMinimumVersion: false, autoUpdateWhenIdle: false,
-    }),
+    getUpdateStatus: async () => {
+      const fallback = androidBoot.updateStatus ?? {
+        state: { type: 'disabled', reason: 'disabled-by-env' },
+        currentVersion: androidBoot.appVersion ?? '',
+        currentTrack: 'stable',
+        trackOverride: null,
+        buildDefaultTrack: null,
+        availableTracks: ['stable'],
+        isTrackManagedByPolicy: true,
+        delivery: 'package-manager',
+        isBelowMinimumVersion: false,
+        autoUpdateWhenIdle: false,
+      };
+      try {
+        const result = await native('update-status');
+        const status = result?.status ?? result;
+        if (status?.state) {
+          androidBoot.updateStatus = status;
+          return status;
+        }
+      } catch {}
+      return fallback;
+    },
+    checkForUpdates: async () => {
+      const result = await native('update-check');
+      const status = result?.status ?? result;
+      if (status?.state) {
+        androidBoot.updateStatus = status;
+        emit('update-status', status);
+      }
+      return status;
+    },
+    setUpdateTrack: async ({ track }) => {
+      const result = await native('update-track', { track });
+      const status = result?.status ?? result;
+      if (status?.state) {
+        androidBoot.updateStatus = status;
+        emit('update-status', status);
+      }
+      return status;
+    },
+    setAutoUpdateWhenIdle: async ({ enabled }) => {
+      const result = await native('update-auto', { enabled: Boolean(enabled) });
+      const status = result?.status ?? result;
+      if (status?.state) {
+        androidBoot.updateStatus = status;
+        emit('update-status', status);
+      }
+      return status;
+    },
+    quitAndInstallUpdate: async ({ expectedVersion } = {}) => {
+      const result = await native('update-install', { expectedVersion: expectedVersion ?? '' });
+      return { status: result?.status ?? 'requested' };
+    },
     getCredentialsState: () => ({ connections: [], credentials: [], catalogRevision: 'local' }),
     getCursorPrivacyModeEnabled: () => false,
     getCursorUnifyCta: () => null,
@@ -526,7 +575,13 @@ export function createServices(context) {
     listCookieOriginGrants: () => [],
     putCookieOriginGrants: () => [],
     getFinanceOverview: () => ({ connections: [] }),
-    forceReconnectGateway: async () => { await command('listAgents'); return { connected: true }; },
+    forceReconnectGateway: async () => {
+      await native('resume', { force: true }).catch(() => {});
+      context.reconnectStreams?.({ onlyIfStaleMs: 0 });
+      await command('listAgents');
+      emit('window-focus', {});
+      return { connected: true };
+    },
     openExternal: async ({ url }) => {
       if (url?.startsWith('grokbot-local:')) return null;
       const target = externalHttpUrl(url);

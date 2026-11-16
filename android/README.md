@@ -13,7 +13,7 @@
 - 界面用官方**桌面版**的界面，和 Windows、Mac 客户端完全相同，取自你自己下载的官方 Windows 0.71.2 安装包；
 - 外面套一个本项目编写的 Android 外壳（`shell/`），负责连接 Host、保存凭据、通知、文件和返回键等手机功能。
 
-Android 安装的是**本项目自开发的外壳** `dev.grokbot.local`：`versionName` **1.1.0**，`versionCode` **10100**。Windows 界面来源仍固定为 **0.71.2**。外壳升级不代表支持新版界面，也不会改变已安装应用的包名。
+Android 安装的是**本项目自开发的外壳** `dev.grokbot.local`：`versionName` **1.2.0**，`versionCode` **10200**。Windows 界面来源仍固定为 **0.71.2**。外壳升级不代表支持新版界面，也不会改变已安装应用的包名。
 
 ## 使用
 
@@ -27,8 +27,8 @@ node android/patchers/patch.mjs
 
 | 输出 | 用途 |
 | --- | --- |
-| `GrokBotLocal-1.1.0-android.apk` | 安装到手机；文件名使用外壳版本 |
-| `GrokBotLocal-1.1.0-android.patch.json` | 生成记录：外壳和界面来源版本、输入文件摘要、APK 摘要、签名证书指纹 |
+| `GrokBotLocal-1.2.0-android.apk` | 安装到手机；文件名使用外壳版本 |
+| `GrokBotLocal-1.2.0-android.patch.json` | 生成记录：外壳和界面来源版本、输入文件摘要、APK 摘要、签名证书指纹 |
 
 校验报告、补丁生成记录和 APK 内的 `assets/web/client/build.json` 都用 `shell.versionName`、`shell.versionCode` 和 `rendererVersion` 代替原来含义不明确的 `version` 字段。写出产物前，工具还会按固定版本核对签名后 APK 的编译清单和内置生成记录。
 
@@ -42,6 +42,8 @@ node android/patchers/patch.mjs
 | `--shell <文件>` | 指定已核验外壳的另一份副本；SHA-256、包名和两个版本字段都必须匹配 |
 | `--output <目录>` | 输出目录，默认 `android/output/` |
 | `--signing-key <文件>` | 签名密钥文件，默认 `~/.grokbot-local/android-signing.json` |
+| `--unsigned` | 仅输出未签名的对齐 APK，配合 `android/patchers/release-sign.mjs` 在签名服务器上完成正式签名与发行清单签发 |
+| `--update-url <URL>` / `--update-public-key <Base64>` | 内置自动更新清单地址及 ECDSA P-256 公钥（需同时提供） |
 | `--force` | 覆盖已有的输出 |
 | `--verify-only` | 核对原包和外壳，在临时目录实际执行 Windows recipe，再检查 Android 入口、桥接注入、CSP、preload 和界面补丁的固定摘要与锚点。不生成 APK 或补丁清单，不访问签名密钥 |
 

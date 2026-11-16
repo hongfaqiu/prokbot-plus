@@ -15,10 +15,7 @@ html.grokbot-android .sand-window-controls {
 html.grokbot-android :is(#sand-setting-hardware-acceleration, #sand-setting-hardware-acceleration-restart) {
   display: none !important;
 }
-/* The Android client has no Tailcat; the connection form asks only for the Host address. */
-html.grokbot-android .grok-host-dialog .grok-host-fields > .grok-host-detail:first-child {
-  display: none !important;
-}
+/* Android supports Tailcat via its built-in tunnel; keep the desktop Host dialog toggle visible. */
 /* The Bot cannot run commands on the phone, so there is nothing to allow under "This computer". */
 html.grokbot-android .sand-settings-panel section:has(#sand-setting-local-execution) {
   display: none !important;

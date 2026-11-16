@@ -12,7 +12,7 @@ Windows · macOS · iOS 客户端补丁 ｜ [自开发 Android App（非官方�
   <a href="#client-versions"><img alt="Windows 补丁仅接受 0.71.2 x64" src="https://img.shields.io/badge/Windows%20%E8%A1%A5%E4%B8%81%E4%BB%85%E6%8E%A5%E5%8F%97-0.71.2%20x64-237E55?logo=windows&logoColor=white"></a>
   <a href="#client-versions"><img alt="macOS 官方 1.1.0 ARM64" src="https://img.shields.io/badge/macOS%20%E5%AE%98%E6%96%B9-1.1.0%20ARM64-111111?logo=apple&logoColor=white"></a>
   <a href="#client-versions"><img alt="iOS 官方 1.25.0" src="https://img.shields.io/badge/iOS%20%E5%AE%98%E6%96%B9-1.25.0-111111?logo=apple&logoColor=white"></a>
-  <a href="#client-versions"><img alt="Android shell 1.1.0" src="https://img.shields.io/badge/%E8%87%AA%E5%BC%80%E5%8F%91%20Android-1.1.0-237E55?logo=android&logoColor=white"></a>
+  <a href="#client-versions"><img alt="Android shell 1.2.0" src="https://img.shields.io/badge/%E8%87%AA%E5%BC%80%E5%8F%91%20Android-1.2.0-237E55?logo=android&logoColor=white"></a>
 <!-- client-badges:end -->
   <img alt="Host d0a4baa" src="https://img.shields.io/badge/Host-d0a4baa-2496ED?logo=docker&logoColor=white">
   <img alt="Noncommercial License" src="https://img.shields.io/badge/License-Noncommercial-6B7280">
@@ -32,7 +32,7 @@ Windows · macOS · iOS 客户端补丁 ｜ [自开发 Android App（非官方�
 | Windows x64 | [1.1.0](https://api2.cursor.sh/updates/api/download/stable/win32-x64-user/sand)（补丁在输入校验时拒绝了该安装包；未测试原生客户端聊天） | 0.71.2 |
 | macOS ARM64 | [1.1.0](https://api2.cursor.sh/updates/api/download/stable/darwin-arm64/sand) | 0.71.2；无 Mac 真机测试 |
 | iOS | [1.25.0](https://apps.apple.com/us/app/grok-bot/id6794501026) | 1.16.0 (23152)；无 iPhone / iPad 真机测试 |
-| Android 9+（自开发，非官方） | 不使用官方 Android APK | 外壳 **1.1.0**（构建 10100），界面来自 Windows **0.71.2** |
+| Android 9+（自开发，非官方） | 不使用官方 Android APK | 外壳 **1.2.0**（构建 10200），界面来自 Windows **0.71.2** |
 | Linux Host / 执行桌面 | 无可核对的最新镜像映射 | Host `d0a4baa`；执行桌面 `9d2ac1b`（amd64） |
 
 [ProkBot Plus 的最新发布包](https://github.com/ferretgeek/prokbot-plus/releases/latest)使用项目自己的版本号；上游 ProkBot 基线是 `3e9fe8c`。

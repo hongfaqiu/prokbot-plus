@@ -2,14 +2,23 @@ import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { JsonStore } from './storage.mjs';
 import { check } from './security.mjs';
-import { PushConfig, parseBarkLink, validTopic, DEFAULT_BARK_ICON_URL } from './push-config.mjs';
+import { PushConfig, parseBarkLink, parseNtfyUrl, parsePushEndpoint, validTopic, DEFAULT_BARK_ICON_URL } from './push-config.mjs';
 import { PushError, PushTransports } from './push-transports.mjs';
 
-const authorizationValues = ['notDetermined', 'denied', 'authorized', 'provisional', 'ephemeral'];
+const authorizationValues = ['notDetermined', 'denied', 'authorized', 'provisional', 'ephemeral', 'granted', 'not_determined', 'unknown'];
+const authorizedStates = ['authorized', 'provisional', 'ephemeral', 'granted'];
 const iso = () => new Date().toISOString();
 const fingerprint = device => createHash('sha256').update(JSON.stringify([
-  device.provider, device.token, device.bark, device.environment, device.bundleId,
+  device.provider, device.token, device.bark, device.ntfy, device.unifiedpush, device.webhook, device.fcmToken, device.environment, device.bundleId,
 ])).digest('hex');
+function clearProviders(target, keep) {
+  if (keep !== 'apns') delete target.token;
+  if (keep !== 'bark') delete target.bark;
+  if (keep !== 'ntfy') delete target.ntfy;
+  if (keep !== 'unifiedpush') delete target.unifiedpush;
+  if (keep !== 'webhook') delete target.webhook;
+  if (keep !== 'fcm') delete target.fcmToken;
+}
 export class PushService {
   constructor(dataDir, auth, { transports = new PushTransports(), retryMs = 5000, enabled = () => true } = {}) {
     this.enabled = enabled; this.auth = auth; this.transports = transports; this.retryMs = retryMs;
@@ -23,12 +32,25 @@ export class PushService {
     const value = this.store.value.devices[device.id] ?? {};
     const { provider = 'none', capable = false, authorization = 'notDetermined', environment = null,
       enabled = true, lastAttemptAt = null, lastDeliveredAt = null, lastError = null, registrationError = null } = value;
+    const pushHost = value.bark?.host ?? value.ntfy?.host ?? value.unifiedpush?.host ?? value.webhook?.host ?? null;
+    const configured =
+      provider === 'bark' ? Boolean(value.bark) :
+      provider === 'ntfy' ? Boolean(value.ntfy) :
+      provider === 'unifiedpush' ? Boolean(value.unifiedpush) :
+      provider === 'webhook' ? Boolean(value.webhook) :
+      provider === 'fcm' ? Boolean(value.fcmToken) :
+      provider === 'apns' && Boolean(value.token);
     return { ...device, deviceId: device.id, name: value.displayName || value.name || device.name,
       kind: device.platform === 'android' ? 'android' : value.kind ?? (device.platform === 'ios' ? 'iphone' : 'mac'),
       bundleId: value.bundleId ?? null, appVersion: value.appVersion ?? null,
       push: { provider, capable, authorization, environment, foreground: this.isForeground(device.id), enabled: enabled && !device.revokedAt,
         barkHost: value.bark?.host ?? null,
-        configured: provider === 'bark' ? Boolean(value.bark) : provider === 'apns' && Boolean(value.token),
+        ntfyHost: value.ntfy?.host ?? null,
+        unifiedPushHost: value.unifiedpush?.host ?? null,
+        webhookHost: value.webhook?.host ?? null,
+        pushHost,
+        hasFcmToken: Boolean(value.fcmToken),
+        configured,
         lastAttemptAt, lastDeliveredAt, lastError, registrationError } };
   }
   devices() { return this.auth.devices().map(device => this.publicDevice(device)); }
@@ -71,7 +93,7 @@ export class PushService {
         next.name = input.name.trim();
       }
       if (input.kind !== undefined) {
-        check(['iphone', 'ipad', 'mac', 'desktop'].includes(input.kind), 400, '设备类型无效');
+        check(['iphone', 'ipad', 'mac', 'desktop', 'android'].includes(input.kind), 400, '设备类型无效');
         next.kind = input.kind === 'desktop' && ['windows', 'android'].includes(input.clientKind) ? input.clientKind : input.kind;
       }
       if (input.bundleId !== undefined) {
@@ -82,6 +104,9 @@ export class PushService {
       }
       if (input.apnsCapable !== undefined) {
         check(typeof input.apnsCapable === 'boolean', 400, '推送能力值无效'); next.capable = input.apnsCapable;
+      }
+      if (input.pushCapable !== undefined) {
+        check(typeof input.pushCapable === 'boolean', 400, '推送能力值无效'); next.capable = input.pushCapable;
       }
       if (input.apnsEnvironment !== undefined) {
         check([null, 'development', 'production'].includes(input.apnsEnvironment), 400, 'APNs 环境无效'); next.environment = input.apnsEnvironment;
@@ -97,7 +122,7 @@ export class PushService {
           next.registrationError = push.registrationError;
         }
         if (push.provider !== undefined) {
-          check(['apns', 'bark', 'none'].includes(push.provider), 400, '推送方式无效');
+          check(['apns', 'bark', 'ntfy', 'unifiedpush', 'webhook', 'fcm', 'none'].includes(push.provider), 400, '推送方式无效');
           next.provider = push.provider;
           if (push.provider === 'apns') {
             check(next.capable && ['development', 'production'].includes(next.environment) && validTopic(next.bundleId), 400, '此安装包尚未报告 APNs 签名权限');
@@ -105,11 +130,63 @@ export class PushService {
               check(typeof push.token === 'string' && /^(?:[a-fA-F0-9]{2}){16,256}$/.test(push.token), 400, 'APNs 设备令牌无效');
               next.token = push.token.toLowerCase(); next.registrationError = null;
             }
-            check(next.token, 400, 'APNs 设备令牌尚未生成'); delete next.bark;
+            check(next.token, 400, 'APNs 设备令牌尚未生成');
+            clearProviders(next, 'apns');
           } else if (push.provider === 'bark') {
             if (push.barkUrl !== undefined && push.barkUrl !== '') next.bark = parseBarkLink(push.barkUrl);
-            check(next.bark, 400, '请填写 Bark 推送链接'); delete next.token;
-          } else { delete next.token; delete next.bark; }
+            check(next.bark, 400, '请填写 Bark 推送链接');
+            clearProviders(next, 'bark');
+          } else if (push.provider === 'ntfy') {
+            const serverDefault = this.config.publicConfig().ntfyServerUrl;
+            const rawUrl = push.ntfyUrl && push.ntfyUrl !== ''
+              ? push.ntfyUrl
+              : push.topic && serverDefault ? `${serverDefault}/${encodeURIComponent(push.topic)}` : '';
+            if (rawUrl) {
+              const prevToken = next.ntfy?.token;
+              next.ntfy = parseNtfyUrl(rawUrl);
+              if (prevToken && push.ntfyToken === undefined) next.ntfy.token = prevToken;
+              next.registrationError = null;
+            }
+            if (push.ntfyToken !== undefined && next.ntfy) {
+              check(typeof push.ntfyToken === 'string' && push.ntfyToken.length <= 1024, 400, 'ntfy 访问令牌无效');
+              if (push.ntfyToken.trim()) next.ntfy = { ...next.ntfy, token: push.ntfyToken.trim() };
+              else delete next.ntfy.token;
+            }
+            check(next.ntfy, 400, '请填写 ntfy 主题地址');
+            clearProviders(next, 'ntfy');
+          } else if (push.provider === 'unifiedpush') {
+            if (push.endpoint !== undefined && push.endpoint !== '') {
+              next.unifiedpush = parsePushEndpoint(push.endpoint, 'UnifiedPush 端点');
+              next.registrationError = null;
+            }
+            check(next.unifiedpush, 400, 'UnifiedPush 端点尚未注册');
+            clearProviders(next, 'unifiedpush');
+          } else if (push.provider === 'webhook') {
+            const rawEndpoint = push.webhookUrl ?? push.endpoint;
+            if (rawEndpoint !== undefined && rawEndpoint !== '') {
+              const prevSecret = next.webhook?.secret;
+              next.webhook = parsePushEndpoint(rawEndpoint, 'Webhook 地址');
+              if (prevSecret && push.webhookSecret === undefined) next.webhook.secret = prevSecret;
+              next.registrationError = null;
+            }
+            if (push.webhookSecret !== undefined && next.webhook) {
+              check(typeof push.webhookSecret === 'string' && push.webhookSecret.length <= 512, 400, 'Webhook 密钥无效');
+              if (push.webhookSecret.trim()) next.webhook = { ...next.webhook, secret: push.webhookSecret.trim() };
+              else delete next.webhook.secret;
+            }
+            check(next.webhook, 400, '请填写 Webhook 推送地址');
+            clearProviders(next, 'webhook');
+          } else if (push.provider === 'fcm') {
+            if (push.fcmToken !== undefined) {
+              check(typeof push.fcmToken === 'string' && push.fcmToken.length >= 16 && push.fcmToken.length <= 4096 && !/\s/.test(push.fcmToken), 400, 'FCM 设备令牌无效');
+              next.fcmToken = push.fcmToken;
+              next.registrationError = null;
+            }
+            check(next.fcmToken, 400, 'FCM 设备令牌尚未生成');
+            clearProviders(next, 'fcm');
+          } else {
+            clearProviders(next, 'none');
+          }
         }
       }
       if (fingerprint(next) !== fingerprint(previous)) {
@@ -157,13 +234,26 @@ export class PushService {
   unavailable(device) {
     if (!device || device.enabled === false || device.provider === 'none') return '此设备未启用推送';
     if (device.provider === 'bark') return device.bark ? null : 'Bark 尚未配置';
+    if (device.provider === 'ntfy') return device.ntfy ? null : 'ntfy 尚未配置';
+    if (device.provider === 'webhook') return device.webhook ? null : 'Webhook 尚未配置';
+    if (device.provider === 'unifiedpush') {
+      if (!device.unifiedpush) return 'UnifiedPush 尚未注册';
+      if (!authorizedStates.includes(device.authorization)) return '此设备尚未允许通知';
+      return null;
+    }
+    if (device.provider === 'fcm') {
+      if (!device.fcmToken) return 'FCM 设备尚未注册';
+      if (!authorizedStates.includes(device.authorization)) return '此设备尚未允许通知';
+      if (!this.config.publicConfig().fcm?.ready) return 'Host 尚未配置 FCM';
+      return null;
+    }
     if (!device.capable || !device.token) return 'APNs 设备尚未注册';
-    if (!['authorized', 'provisional', 'ephemeral'].includes(device.authorization)) return '此设备尚未允许通知';
+    if (!authorizedStates.includes(device.authorization)) return '此设备尚未允许通知';
     if (!this.config.publicConfig().ready) return 'Host 尚未配置 APNs';
     if (device.bundleId !== this.config.store.value.topic) return '设备 Bundle ID 与 APNs 配置不一致';
     return null;
   }
-  async enqueue(item, onlyDeviceId) {
+  async enqueue(item, onlyDeviceId, { bypassForeground = false } = {}) {
     if (!this.enabled()) return [];
     const authDevices = this.auth.devices().filter(device => !device.revokedAt && (!onlyDeviceId || device.id === onlyDeviceId));
     const ids = [];
@@ -173,9 +263,10 @@ export class PushService {
         if (this.unavailable(target)) continue;
         if (!onlyDeviceId && Date.parse(device.createdAt) > Date.parse(item.createdAt)) continue;
         const id = `${device.id}:${item.id}`;
+        const suppressed = !bypassForeground && this.isForeground(device.id);
         if (!state.jobs.some(job => job.id === id)) state.jobs.push({
-          id, deviceId: device.id, item, fingerprint: fingerprint(target), status: this.isForeground(device.id) ? 'suppressed' : 'queued',
-          reason: this.isForeground(device.id) ? '应用正在前台接收通知' : undefined, attempts: 0, nextAt: Date.now(),
+          id, deviceId: device.id, item, fingerprint: fingerprint(target), status: suppressed ? 'suppressed' : 'queued',
+          reason: suppressed ? '应用正在前台接收通知' : undefined, bypassForeground, attempts: 0, nextAt: Date.now(),
         });
         ids.push(id);
       }
@@ -202,7 +293,7 @@ export class PushService {
         if (reason || fingerprint(device) !== job.fingerprint || Date.now() - Date.parse(job.item.createdAt) > 86400000) {
           await this.settle(job, 'cancelled', reason ?? '推送配置已更换或通知已过期'); continue;
         }
-        if (this.isForeground(job.deviceId)) {
+        if (!job.bypassForeground && this.isForeground(job.deviceId)) {
           await this.store.mutate(state => {
             const current = state.jobs.find(value => value.id === job.id);
             if (current?.status === 'queued') Object.assign(current, { status: 'suppressed', reason: '应用正在前台接收通知' });
@@ -210,8 +301,12 @@ export class PushService {
           continue;
         }
         try {
-          if (device.provider === 'bark') await this.transports.bark({ ...device,
-            iconUrl: this.config.store.value.barkIconUrl || DEFAULT_BARK_ICON_URL }, job.item);
+          const iconUrl = this.config.store.value.barkIconUrl || DEFAULT_BARK_ICON_URL;
+          if (device.provider === 'bark') await this.transports.bark({ ...device, iconUrl }, job.item);
+          else if (device.provider === 'ntfy') await this.transports.ntfy({ ...device, iconUrl }, job.item);
+          else if (device.provider === 'unifiedpush') await this.transports.unifiedpush(device, job.item);
+          else if (device.provider === 'webhook') await this.transports.webhook(device, job.item);
+          else if (device.provider === 'fcm') await this.transports.fcm(device, job.item, this.config.store.value);
           else await this.transports.apns(device, job.item, this.config.store.value);
           await this.settle(job, 'sent', null);
         } catch (error) {
@@ -235,16 +330,28 @@ export class PushService {
       if (!device || fingerprint(device) !== job.fingerprint) return;
       device.lastAttemptAt = iso(); device.lastError = error;
       if (status === 'sent') device.lastDeliveredAt = iso();
-      if (invalidToken) { delete device.token; device.registrationError = 'APNs 设备令牌失效，请重新打开应用'; }
+      if (invalidToken) {
+        if (device.provider === 'unifiedpush') {
+          delete device.unifiedpush;
+          device.registrationError = 'UnifiedPush 端点已失效，请重新打开应用';
+        } else if (device.provider === 'fcm') {
+          delete device.fcmToken;
+          device.registrationError = 'FCM 设备令牌失效，请重新打开应用';
+        } else {
+          delete device.token;
+          device.registrationError = 'APNs 设备令牌失效，请重新打开应用';
+        }
+      }
     });
   }
-  async test(deviceId, agentId) {
+  async test(deviceId, agentId, { bypassForeground = false } = {}) {
     check(this.auth.device(deviceId), 404, '设备不存在');
-    const reason = this.isForeground(deviceId) ? '应用正在前台接收通知' : this.unavailable(this.store.value.devices[deviceId]);
+    const reason = !bypassForeground && this.isForeground(deviceId) ? '应用正在前台接收通知' : this.unavailable(this.store.value.devices[deviceId]);
     if (reason) return { ok: false, status: 'skipped', reason };
-    const item = { id: randomUUID(), type: 'test', agentId, title: 'Grok Bot 通知测试',
-      body: '点击此通知打开对应会话。', createdAt: iso(), deepLink: `grokbot-local://agent/${agentId}` };
-    const ids = await this.enqueue(item, deviceId);
+    const safeAgentId = typeof agentId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(agentId) ? agentId : 'grokbot-test';
+    const item = { id: randomUUID(), type: 'test', agentId: safeAgentId, title: 'Grok Bot 通知测试',
+      body: '点击此通知打开对应会话。', createdAt: iso(), deepLink: `grokbot-local://agent/${safeAgentId}` };
+    const ids = await this.enqueue(item, deviceId, { bypassForeground });
     await this.flush();
     const job = this.store.value.jobs.find(job => ids.includes(job.id));
     return { ok: job?.status === 'sent', status: job?.status ?? 'skipped', reason: job?.error ?? undefined };

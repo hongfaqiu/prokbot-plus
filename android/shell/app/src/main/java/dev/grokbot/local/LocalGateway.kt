@@ -1,5 +1,6 @@
 package dev.grokbot.local
 
+import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
 import java.io.BufferedInputStream
@@ -14,6 +15,7 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.net.URI
 import java.security.SecureRandom
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.ThreadPoolExecutor
@@ -93,7 +95,33 @@ class LocalGateway(private val app: GrokBotApp) {
     private val pool = ThreadPoolExecutor(0, 64, 60L, TimeUnit.SECONDS, SynchronousQueue(), { task ->
         Thread(task, "grokbot-gateway").apply { isDaemon = true }
     })
+    private class ActiveSse(val upstream: Socket, val client: Socket, @Volatile var lastActivityMs: Long)
+    private val activeSseStreams = ConcurrentHashMap.newKeySet<ActiveSse>()
     private val native = NativeEndpoints(app, this)
+
+    fun closeSseStreams(reason: String, onlyIfIdleMs: Long = 0L): Int {
+        val now = SystemClock.elapsedRealtime()
+        var closed = 0
+        for (entry in activeSseStreams) {
+            if (onlyIfIdleMs > 0L && now - entry.lastActivityMs < onlyIfIdleMs) continue
+            activeSseStreams.remove(entry)
+            runCatching { entry.upstream.close() }
+            runCatching { entry.client.close() }
+            closed++
+        }
+        if (closed > 0) Log.i(TAG, "Closed $closed SSE stream(s): $reason")
+        return closed
+    }
+
+    fun maxSseIdleMs(): Long {
+        val now = SystemClock.elapsedRealtime()
+        var max = -1L
+        for (entry in activeSseStreams) {
+            val idle = (now - entry.lastActivityMs).coerceAtLeast(0L)
+            if (idle > max) max = idle
+        }
+        return max
+    }
 
     fun start() {
         val appSocket = bind(APP_PORTS)
@@ -236,7 +264,13 @@ class LocalGateway(private val app: GrokBotApp) {
     /** Proxies one request to the Host and streams the reply; the connection is not reused. */
     private fun proxy(client: Socket, input: InputStream, output: OutputStream, head: HttpHead, vnc: Boolean) {
         val current = connection ?: throw HttpFailure(503, Text.t(app, "尚未连接 Host。", "Not connected to a Host."))
-        val upstream = Upstream.parse(current.server)
+        val baseServer = try {
+            app.tailcat.resolveServer(app, current)
+        } catch (error: Exception) {
+            Log.w(TAG, "Tailcat resolve failed: ${error.message}")
+            throw HttpFailure(502, Text.t(app, "无法连接 Host，请检查网络和地址。", "Cannot reach the Host. Check the network and address."))
+        }
+        val upstream = Upstream.parse(baseServer)
         val upgrade = head["Upgrade"].equals("websocket", true)
         val length = head.requestLength(MAX_PROXY_BODY)
 
@@ -273,7 +307,8 @@ class LocalGateway(private val app: GrokBotApp) {
             throw HttpFailure(502, Text.t(app, "无法连接 Host，请检查网络和地址。", "Cannot reach the Host. Check the network and address."))
         }
         socket.use {
-            socket.soTimeout = if (upgrade) 15_000 else 130_000
+            val isSseRequest = !upgrade && (head.path == "/events" || head.path == "/notifications/events")
+            socket.soTimeout = if (upgrade) 15_000 else if (isSseRequest) 45_000 else 130_000
             val upstreamOutput = socket.getOutputStream()
             val upstreamInput = BufferedInputStream(socket.getInputStream(), 16 * 1024)
             // Until the reply head arrives nothing has been sent to the WebView, so a failed
@@ -288,6 +323,8 @@ class LocalGateway(private val app: GrokBotApp) {
                 null
             } ?: throw HttpFailure(502, Text.t(app, "Host 没有响应，请稍后重试。", "The Host did not answer. Try again later."))
             val switching = upgrade && reply.status == 101
+            val isSse = !switching && (isSseRequest || reply["Content-Type"].orEmpty().contains("text/event-stream", ignoreCase = true))
+            if (isSse) socket.soTimeout = 45_000
             if (!switching) {
                 reply.remove("Keep-Alive")
                 reply["Connection"] = "close"
@@ -333,6 +370,31 @@ class LocalGateway(private val app: GrokBotApp) {
                 try { pump(upstreamInput, output) } catch (_: IOException) {}
                 try { client.shutdownOutput() } catch (_: IOException) {}
                 upward.join(2_000)
+            } else if (isSse) {
+                val entry = ActiveSse(socket, client, SystemClock.elapsedRealtime())
+                activeSseStreams.add(entry)
+                var watcher: Thread? = null
+                try {
+                    if (length == 0L) {
+                        client.soTimeout = 0
+                        watcher = Thread({
+                            try {
+                                while (input.read() >= 0) Unit
+                            } catch (_: IOException) {
+                            } finally {
+                                runCatching { socket.close() }
+                            }
+                        }, "grokbot-sse-watch").apply { isDaemon = true; start() }
+                    }
+                    try {
+                        pump(upstreamInput, output) { entry.lastActivityMs = SystemClock.elapsedRealtime() }
+                    } catch (_: SocketTimeoutException) {
+                        Log.i(TAG, "SSE upstream idle timeout for ${head.path}")
+                    }
+                } finally {
+                    activeSseStreams.remove(entry)
+                    watcher?.interrupt()
+                }
             } else {
                 try { pump(upstreamInput, output) } catch (_: SocketTimeoutException) {}
             }
@@ -384,11 +446,12 @@ class LocalGateway(private val app: GrokBotApp) {
     }
 
     /** Copies until EOF and flushes every read so event streams arrive immediately. */
-    private fun pump(from: InputStream, to: OutputStream) {
+    private fun pump(from: InputStream, to: OutputStream, onActivity: (() -> Unit)? = null) {
         val buffer = ByteArray(16 * 1024)
         while (true) {
             val read = from.read(buffer)
             if (read < 0) return
+            onActivity?.invoke()
             to.write(buffer, 0, read)
             to.flush()
         }

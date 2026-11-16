@@ -2,6 +2,29 @@ import { grokText } from './i18n.mjs';
 import { subscribe } from './streams.mjs';
 
 const COORDINATOR_VERSION = 3;
+const VALID_TRANSPORT_KINDS = new Set([
+  'refused', 'timeout', 'http_5xx', 'dns', 'no_storage', 'access_denied', 'box_blocked', 'network', 'pod_hibernated',
+]);
+
+export function classifyTransportKind(error) {
+  if (!error || error instanceof SyntaxError) return undefined;
+  if (VALID_TRANSPORT_KINDS.has(error.transportKind)) return error.transportKind;
+  if (typeof error.httpStatus === 'number') {
+    if (error.httpStatus === 401 || error.httpStatus === 403) return 'access_denied';
+    if (error.httpStatus === 408 || error.httpStatus === 504) return 'timeout';
+    if (error.httpStatus === 507) return 'no_storage';
+    if (error.httpStatus >= 500 && error.httpStatus <= 599) return 'http_5xx';
+    return undefined;
+  }
+  const code = error?.cause?.code ?? error?.code;
+  if (code === 'ECONNREFUSED') return 'refused';
+  if (code === 'ETIMEDOUT' || code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'UND_ERR_HEADERS_TIMEOUT' || code === 'UND_ERR_BODY_TIMEOUT') {
+    return 'timeout';
+  }
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'dns';
+  if (error.name === 'TimeoutError' || /timed?\s*out/i.test(String(error.message ?? ''))) return 'timeout';
+  return 'network';
+}
 
 export function createGateway(config, onUnauthorized, onConnected, onStateChanged) {
   const lifetime = new AbortController();
@@ -24,7 +47,7 @@ export function createGateway(config, onUnauthorized, onConnected, onStateChange
       if (response.status === 401) unauthorized();
       const value = await response.json().catch(() => null);
       throw Object.assign(new Error(value?.message ?? value?.error ?? `HTTP ${response.status}`),
-        { httpStatus: response.status, failureCode: value?.failureCode });
+        { httpStatus: response.status, failureCode: value?.failureCode, transportKind: value?.transportKind });
     }
     return response.status === 204 || response.status === 205 ? null : await response.json();
   }
@@ -80,11 +103,16 @@ export function createGateway(config, onUnauthorized, onConnected, onStateChange
           call.signal.throwIfAborted();
           send({ kind: 'reply', requestId: frame.requestId, outcome: { status: 'ok', value } });
         }
-        catch (error) { send({ kind: 'reply', requestId: frame.requestId, outcome: { status: 'failed', failure: {
-          code: call.signal.aborted ? 'cancelled' : 'gateway-command-failed', message: error.message,
-          ...(error.httpStatus ? { httpStatus: error.httpStatus } : {}),
-          ...(error.failureCode ? { failureCode: error.failureCode } : {}),
-        } } }); }
+        catch (error) {
+          const transportKind = call.signal.aborted ? undefined : classifyTransportKind(error);
+          send({ kind: 'reply', requestId: frame.requestId, outcome: { status: 'failed', failure: {
+            code: call.signal.aborted ? 'cancelled' : error instanceof SyntaxError ? 'gateway-malformed-reply' : 'gateway-command-failed',
+            message: error.message,
+            ...(error.httpStatus ? { httpStatus: error.httpStatus } : {}),
+            ...(error.failureCode ? { failureCode: error.failureCode } : {}),
+            ...(transportKind ? { transportKind } : {}),
+          } } });
+        }
         finally { pending.delete(frame.requestId); }
       }
     };

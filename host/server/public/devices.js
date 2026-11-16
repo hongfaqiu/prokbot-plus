@@ -57,15 +57,32 @@ export function createDevices(context) {
     if (agents.some(agent => agent.id === selection)) select.value = selection;
     $('#test-notification').disabled = !select.value;
   }
+  const providerLabels = {
+    apns: 'Apple APNs',
+    bark: 'Bark',
+    ntfy: 'ntfy',
+    unifiedpush: 'UnifiedPush',
+    webhook: 'Webhook',
+    fcm: 'Firebase FCM',
+  };
   function deviceRow(device) {
     const notice = device.push || {}, label = t(kinds[device.kind] || kinds[device.platform] || '设备');
-    const badges = [badge(notice.provider === 'apns' ? 'Apple APNs' : notice.provider === 'bark' ? 'Bark' : t('在线通知'))];
-    if (notice.provider === 'apns') badges.push(badge(t('权限：{0}', t(permissions[notice.authorization] || notice.authorization || '尚未报告')), notice.authorization === 'denied' ? 'warn' : ''));
+    const providerLabel = providerLabels[notice.provider] || t('在线通知');
+    const badges = [badge(providerLabel)];
+    if (notice.provider !== 'bark' && notice.provider !== 'webhook' && (notice.provider !== 'none' || device.platform === 'android' || device.platform === 'ios'))
+      badges.push(badge(t('权限：{0}', t(permissions[notice.authorization] || notice.authorization || '尚未报告')), notice.authorization === 'denied' ? 'warn' : ''));
     if (device.platform === 'ios' && notice.provider !== 'bark' && notice.capable === false) badges.push(badge(t('未提供 APNs 权限'), 'warn'));
     if (notice.provider === 'apns' && notice.environment) badges.push(badge(['sandbox', 'development'].includes(notice.environment) ? t('开发环境') : t('生产环境')));
     if (notice.configured) badges.push(badge(notice.enabled ? t('推送已启用') : t('推送已关闭'), notice.enabled ? 'success' : ''));
+    const hostLine = notice.barkHost
+      ? t('Bark 服务：{0}', notice.barkHost)
+      : notice.ntfyHost
+        ? t('ntfy 服务：{0}', notice.ntfyHost)
+        : notice.pushHost
+          ? t('推送服务：{0}', notice.pushHost)
+          : null;
     const meta = [t('{0}{1} · 最近连接 {2}', label, device.appVersion ? ` · ${device.appVersion}` : '', date(device.lastSeenAt)), device.bundleId,
-      notice.barkHost && t('Bark 服务：{0}', notice.barkHost),
+      hostLine,
       notice.lastAttemptAt && t('最近尝试 {0}{1}', date(notice.lastAttemptAt), notice.lastDeliveredAt ? t(' · 服务接收 {0}', date(notice.lastDeliveredAt)) : '')];
     const actions = [];
     if (device.revokedAt) actions.push(badge(t('已撤销 · {0}', date(device.revokedAt))));

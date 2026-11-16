@@ -18,6 +18,7 @@ import { readZip, writeZip, createEntry, entryBytes, signApk, verifyApk, createS
 import { RENDERER_PATCHES, applyPinnedRendererPatch } from './renderer-patches.mjs';
 import { checkBuildOutput, writeBuildOutput } from './output.mjs';
 import { verifyShellVersion, verifyClientVersions } from './shell-version.mjs';
+import { normalizeEcPublicKey } from './release-sign.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const androidRoot = path.resolve(here, '..');
@@ -70,7 +71,7 @@ export async function readPinnedShell(filename, pin) {
   let size = 0;
   for await (const chunk of createReadStream(filename)) {
     size += chunk.length;
-    if (size > 16 * 1024 * 1024) throw new Error('Android 外壳 APK 超出大小限制。');
+    if (size > 128 * 1024 * 1024) throw new Error('Android 外壳 APK 超出大小限制。');
     chunks.push(chunk);
   }
   const bytes = Buffer.concat(chunks, size), digest = sha(bytes);
@@ -163,17 +164,41 @@ async function main() {
   if (!/^\d+\.\d+\.\d+$/.test(versionName) || !Number.isSafeInteger(versionCode) || versionCode <= 0)
     throw new Error('Invalid Android shell version pin.');
   const versions = { shell: { versionName, versionCode }, rendererVersion: build.desktopVersion };
-  const base = `GrokBotLocal-${versionName}-android`, apkName = `${base}.apk`, reportName = `${base}.patch.json`;
+  const unsigned = args.includes('--unsigned');
+  const base = `GrokBotLocal-${versionName}-android`;
+  const apkName = unsigned ? `${base}-unsigned.apk` : `${base}.apk`, reportName = `${base}.patch.json`;
   if (args.includes('--help')) {
     console.log(`node android/patchers/patch.mjs [--source <Grok_Bot_${supported.version}_Setup.exe | app-64.7z | 安装目录>] [--output <目录>]
-    [--signing-key <文件>] [--shell <外壳 APK>] [--force] [--verify-only]
+    [--signing-key <文件>] [--shell <外壳 APK>] [--update-url <URL> --update-public-key <SPKI Base64>] [--unsigned] [--force] [--verify-only]
 自开发 Android 外壳 ${versionName}（versionCode ${versionCode}）；Windows renderer ${build.desktopVersion}。省略 --source 时自动下载并校验该版 Windows x64 安装包。
 --shell 只接受与发行清单的 SHA-256、包名和版本完全相符的外壳副本。
+--unsigned 仅输出未签名的对齐 APK（供签名服务器使用 release-sign.mjs 统一完成正式签名与清单签发）。
+--update-url / --update-public-key 将自动更新清单地址及 ECDSA P-256 公钥写入构建记录。
 --verify-only 在临时目录验证原包、外壳、Windows recipe、Android 入口和界面补丁；不生成 APK，不读取签名密钥。
 签名密钥默认保存在 ~/.grokbot-local/android-signing.json；升级 App 时必须使用同一个密钥，请备份。
-默认输出到 android/output/：${apkName} 和 ${reportName}。`);
+默认输出到 android/output/：${base}.apk 和 ${reportName}。`);
     return;
   }
+  const updateUrlRaw = arg('--update-url');
+  const updateKeyRaw = arg('--update-public-key');
+  const updateKeyFile = arg('--update-public-key-file');
+  if (Boolean(updateUrlRaw) !== Boolean(updateKeyRaw || updateKeyFile)) {
+    throw new Error('--update-url 必须与 --update-public-key（或 --update-public-key-file）同时提供。');
+  }
+  let updateConfig = null;
+  if (updateUrlRaw) {
+    const parsedUrl = new URL(updateUrlRaw);
+    if (!['https:', 'http:'].includes(parsedUrl.protocol) || parsedUrl.username || parsedUrl.password ||
+        (parsedUrl.protocol === 'http:' && parsedUrl.hostname !== '127.0.0.1')) {
+      throw new Error('--update-url 必须是有效的 HTTPS 地址（本地测试允许 127.0.0.1）。');
+    }
+    const keyInput = updateKeyRaw ?? await readFile(path.resolve(updateKeyFile), 'utf8');
+    updateConfig = {
+      updateUrl: parsedUrl.href.replace(/\/+$/, ''),
+      updatePublicKey: normalizeEcPublicKey(keyInput),
+    };
+  }
+
   const startedAt = performance.now();
   const shellPath = path.resolve(arg('--shell') ?? path.join(repo, build.shell.path));
   const verifyOnly = args.includes('--verify-only');
@@ -206,7 +231,7 @@ async function main() {
     const apkPath = path.join(outputRoot, apkName), manifestPath = path.join(outputRoot, reportName);
     const signingPath = path.resolve(arg('--signing-key') ?? path.join(os.homedir(), '.grokbot-local', 'android-signing.json'));
     const force = args.includes('--force');
-    await checkBuildOutput({ source, shell: shellPath, key: signingPath, targets: [apkPath, manifestPath], force });
+    await checkBuildOutput({ source, shell: shellPath, ...(unsigned ? {} : { key: signingPath }), targets: [apkPath, manifestPath], force });
 
     const files = new Map();
     const add = (name, bytes) => { if (files.has(name)) throw new Error(`重复的文件：${name}`); files.set(name, Buffer.from(bytes)); };
@@ -222,7 +247,7 @@ async function main() {
     const icon = applicationIcon(await readFile(originalExe)).png;
     add('assets/web/client/icon.png', icon);
     const builtAt = new Date().toISOString();
-    add('assets/web/client/build.json', JSON.stringify({ ...versions, sourceAsarSha256: asarSha256, builtAt }));
+    add('assets/web/client/build.json', JSON.stringify({ ...versions, sourceAsarSha256: asarSha256, builtAt, ...(updateConfig ?? {}) }));
 
     const placeholder = await readFile(path.join(androidRoot, 'shell/app/src/main/res/drawable-nodpi/app_icon.png'));
     let iconReplaced = false;
@@ -238,13 +263,27 @@ async function main() {
     if (!iconReplaced) throw new Error('外壳 APK 中没有找到图标占位文件。');
     for (const [name, bytes] of [...files].sort(([a], [b]) => a.localeCompare(b))) entries.push(createEntry(name, bytes));
 
+    const unsignedZip = writeZip(entries);
+    if (unsigned) {
+      const installed = verifyClientVersions(readZip(unsignedZip).entries, build);
+      const manifest = { builtAt, output: apkPath, unsigned: true, ...versions, packageName: installed.packageName, checks,
+        source, originalAsarSha256: asarSha256, shellSha256: shell.sha256, apkSha256: sha(unsignedZip), bytes: unsignedZip.length,
+        files: files.size, ...(updateConfig ?? {}),
+        timings: { totalSeconds: Number(((performance.now() - startedAt) / 1000).toFixed(3)) } };
+      await writeBuildOutput(outputRoot, [{ target: apkPath, bytes: unsignedZip },
+        { target: manifestPath, bytes: JSON.stringify(manifest, null, 2) }], force);
+      console.log(JSON.stringify(manifest, null, 2));
+      return;
+    }
+
     const identity = await loadSigningIdentity(signingPath);
-    const apk = signApk(writeZip(entries), identity);
+    const apk = signApk(unsignedZip, identity);
     const certificate = verifyApk(apk);
     const installed = verifyClientVersions(readZip(apk).entries, build);
     const manifest = { builtAt, output: apkPath, ...versions, packageName: installed.packageName, checks,
       source, originalAsarSha256: asarSha256, shellSha256: shell.sha256, apkSha256: sha(apk), bytes: apk.length,
-      files: files.size, signing: { key: signingPath, created: identity.created, certificateSha256: certificateFingerprint(identity.certificate),
+      files: files.size, ...(updateConfig ?? {}),
+      signing: { key: signingPath, created: identity.created, certificateSha256: certificateFingerprint(identity.certificate),
         subject: certificate.subject.replace(/\n/g, ', '), scheme: 'v2' },
       timings: { totalSeconds: Number(((performance.now() - startedAt) / 1000).toFixed(3)) } };
     await writeBuildOutput(outputRoot, [{ target: apkPath, bytes: apk },

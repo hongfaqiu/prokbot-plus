@@ -46,6 +46,7 @@ class MainActivity : Activity() {
     private var pendingMediaRequest: PermissionRequest? = null
     @Volatile var pendingAgent: String? = null
         private set
+    private var pausedAtMs = 0L
     private var debugging = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -73,6 +74,7 @@ class MainActivity : Activity() {
         }
         load(if (app.gateway.connection != null) Page.WORKSPACE else Page.CONNECTION)
         NotificationService.sync(app)
+        app.updater.checkForUpdatesAsyncIfAuto()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -88,11 +90,19 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         app.inForeground = true
-        emit("focus", JSONObject().put("focused", true))
+        val awayMs = if (pausedAtMs > 0L) (android.os.SystemClock.elapsedRealtime() - pausedAtMs).coerceAtLeast(0L) else 0L
+        pausedAtMs = 0L
+        NotificationService.sync(app)
+        NotificationService.syncForeground(app, true)
+        app.push.onForegroundChanged(true)
+        emit("focus", JSONObject().put("focused", true).put("awayMs", awayMs))
     }
 
     override fun onPause() {
         app.inForeground = false
+        if (pausedAtMs == 0L) pausedAtMs = android.os.SystemClock.elapsedRealtime()
+        NotificationService.syncForeground(app, false)
+        app.push.onForegroundChanged(false)
         emit("focus", JSONObject().put("focused", false))
         super.onPause()
     }
@@ -136,6 +146,7 @@ class MainActivity : Activity() {
             return
         }
         page = next
+        if (next == Page.CONNECTION) app.viewingAgentId = null
         val gateway = app.gateway
         CookieManager.getInstance().setCookie(gateway.appOrigin, gateway.cookie) {
             CookieManager.getInstance().flush()
@@ -302,6 +313,8 @@ class MainActivity : Activity() {
                 pendingMediaRequest = null
             }
             REQUEST_NOTIFICATIONS -> {
+                app.push.notePermissionAsked()
+                app.push.syncDeviceAsync(foreground = app.inForeground, includePush = false)
                 pendingNotificationPermission?.complete(granted)
                 pendingNotificationPermission = null
             }
@@ -384,6 +397,12 @@ class MainActivity : Activity() {
         @Suppress("DEPRECATION")
         return insets.consumeSystemWindowInsets()
     }
+
+    fun emitPushState(state: JSONObject) = emit("push-state", state)
+
+    fun emitUpdateStatus(status: JSONObject) = emit("update-status", status)
+
+    fun emitReconnectStreams() = emit("reconnect-streams", JSONObject())
 
     private fun emit(type: String, payload: JSONObject) {
         val event = JSONObject().put("type", type).put("payload", payload)

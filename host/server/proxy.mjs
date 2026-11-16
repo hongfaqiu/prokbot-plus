@@ -126,10 +126,76 @@ export function sseRewriter(rewrite) {
     },
   });
 }
+export const DEFAULT_SSE_KEEPALIVE_MS = 20_000;
+const MAX_TIMEOUT_MS = 0x7fff_ffff;
+export function sseKeepalive(intervalMs = DEFAULT_SSE_KEEPALIVE_MS) {
+  const delay = Number(intervalMs);
+  const validDelay = Number.isFinite(delay) && delay > 0 && delay <= MAX_TIMEOUT_MS;
+  let timer = null;
+  let tail = "";
+  let atBoundary = true;
+  let closed = false;
+  const clear = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+  const stream = new Transform({
+    transform(chunk, _encoding, done) {
+      clear();
+      const text = Buffer.isBuffer(chunk)
+        ? chunk.subarray(-4).toString("latin1")
+        : ArrayBuffer.isView(chunk)
+          ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength).subarray(-4).toString("latin1")
+          : String(chunk).slice(-4);
+      if (text.length) {
+        tail = (tail + text).slice(-4);
+        atBoundary = /(?:\r?\n\r?\n|\r\r)$/.test(tail);
+      }
+      this.push(chunk);
+      arm();
+      done();
+    },
+    flush(done) {
+      closed = true;
+      clear();
+      done();
+    },
+  });
+  function arm() {
+    if (closed || !validDelay || !atBoundary) return;
+    clear();
+    timer = setTimeout(() => {
+      timer = null;
+      if (closed || stream.destroyed || stream.writableEnded) return;
+      if (stream.readableLength >= 256 * 1024) {
+        stream.destroy();
+        return;
+      }
+      stream.push(": heartbeat\n\n");
+      arm();
+    }, delay);
+    timer.unref?.();
+  }
+  stream.once("close", () => {
+    closed = true;
+    clear();
+  });
+  arm();
+  return stream;
+}
 export function proxyHttp(
   request,
   response,
-  { target, path, token, rewrite, ticketCookie },
+  {
+    target,
+    path,
+    token,
+    rewrite,
+    ticketCookie,
+    sseKeepaliveMs = DEFAULT_SSE_KEEPALIVE_MS,
+  },
 ) {
   const transport = target.protocol === "https:" ? https : http;
   const upstream = transport.request(target, {
@@ -149,12 +215,25 @@ export function proxyHttp(
   upstream.once("close", () => clearTimeout(timer));
   upstream.on("response", (incoming) => {
     clearTimeout(timer);
-    const type = String(incoming.headers["content-type"] ?? "");
+    const type = String(incoming.headers["content-type"] ?? "").toLowerCase();
+    const encoding = String(incoming.headers["content-encoding"] ?? "").trim().toLowerCase();
+    const identity = !encoding || encoding === "identity";
+    const okStream = incoming.statusCode >= 200 && incoming.statusCode < 300 && incoming.statusCode !== 204;
+    const isSse = type.includes("text/event-stream");
     const json = rewrite && type.includes("application/json");
-    const sse = rewrite && type.includes("text/event-stream");
-    const headers = responseHeaders(incoming.headers, json || sse);
+    const sse = rewrite && isSse && okStream && identity;
+    const keepaliveDelay = Number(sseKeepaliveMs);
+    const keepalive =
+      isSse &&
+      okStream &&
+      identity &&
+      request.method !== "HEAD" &&
+      Number.isFinite(keepaliveDelay) &&
+      keepaliveDelay > 0 &&
+      keepaliveDelay <= MAX_TIMEOUT_MS;
+    const headers = responseHeaders(incoming.headers, json || sse || keepalive);
     if (ticketCookie) headers["set-cookie"] = ticketCookie;
-    if (type.includes("text/event-stream")) headers["x-accel-buffering"] = "no";
+    if (isSse) headers["x-accel-buffering"] = "no";
     if (json) {
       const chunks = [];
       let size = 0;
@@ -185,12 +264,11 @@ export function proxyHttp(
     } else {
       response.writeHead(incoming.statusCode, headers);
       response.flushHeaders();
-      pipeline(
-        ...(sse
-          ? [incoming, sseRewriter(rewrite), response]
-          : [incoming, response]),
-        () => upstream.destroy(),
-      );
+      const streams = [incoming];
+      if (sse) streams.push(sseRewriter(rewrite));
+      if (keepalive) streams.push(sseKeepalive(keepaliveDelay));
+      streams.push(response);
+      pipeline(...streams, () => upstream.destroy());
     }
   });
   request.pipe(upstream);

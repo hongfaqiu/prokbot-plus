@@ -56,7 +56,7 @@ export function probeLocalMethod(trusted, declared, call, method) {
   return { ok: Boolean(trusted), value: Boolean(trusted && declared.has(method) && call?.supports(method)) };
 }
 
-export async function createLocalServices(profile, window, { command, request, attachment, attachmentHandlers = {}, connection, disconnect, notifications, pickAvatarFile, openExternal, settings = {}, appVersion, persistence = createClientPersistence(profile) }) {
+export async function createLocalServices(profile, window, { command, request, attachment, attachmentHandlers = {}, connection, disconnect, notifications, updater, pickAvatarFile, openExternal, settings = {}, appVersion, persistence = createClientPersistence(profile) }) {
   const linkPreview = createLinkPreview({ profile });
   const known = {
     getLinkMetadata: args => linkPreview.getMetadata(args),
@@ -145,16 +145,22 @@ export async function createLocalServices(profile, window, { command, request, a
     getEgressTunnelStatus: () => boot.egressTunnelStatus,
     getNotificationPreferences: () => notifications.getPreferences(),
     getHardwareAcceleration: () => true,
-    getUpdateStatus: () => ({
+    getUpdateStatus: () => updater ? updater.status() : ({
       state: { type: "disabled", reason: "disabled-by-env" },
       currentVersion: appVersion,
       currentTrack: "stable",
+      trackOverride: null,
+      buildDefaultTrack: null,
       availableTracks: ["stable"],
       isTrackManagedByPolicy: true,
       delivery: "package-manager",
       isBelowMinimumVersion: false,
       autoUpdateWhenIdle: false,
     }),
+    checkForUpdates: () => updater ? updater.check() : known.getUpdateStatus(),
+    setUpdateTrack: args => updater ? updater.setTrack(args) : known.getUpdateStatus(),
+    setAutoUpdateWhenIdle: args => updater ? updater.setAutoUpdateWhenIdle(args) : known.getUpdateStatus(),
+    quitAndInstallUpdate: args => updater ? updater.quitAndInstall(args) : ({ status: 'unsupported' }),
     getCredentialsState: () => ({
       connections: [],
       credentials: [],

@@ -88,6 +88,18 @@ function endpoint(value) {
     );
   return url;
 }
+function isDirectLoopback(request) {
+  if (
+    request.headers["x-forwarded-host"] ||
+    request.headers["x-forwarded-for"] ||
+    request.headers["forwarded"] ||
+    request.headers["x-forwarded-proto"] === "https"
+  ) {
+    return false;
+  }
+  const host = String(request.headers.host ?? "").trim().toLowerCase();
+  return /^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?$/.test(host);
+}
 export async function createSelfHostServer(options = {}) {
   const dataDir = resolve(
     options.dataDir ?? process.env.GROKBOT_DATA_DIR ?? "/data",
@@ -100,6 +112,8 @@ export async function createSelfHostServer(options = {}) {
   );
   const publicUrl = options.publicUrl ?? process.env.GROKBOT_PUBLIC_URL;
   const canonical = publicUrl ? endpoint(publicUrl).origin : null;
+  const requestOrigin = (request) =>
+    originFor(request, network.isIngress(request) || isDirectLoopback(request) ? "" : canonical);
   const hostDataDir = resolve(
     options.hostDataDir ??
       process.env.GROKBOT_HOST_DATA_DIR ??
@@ -369,6 +383,10 @@ export async function createSelfHostServer(options = {}) {
             { id: "sse", name: "在线客户端", status: "ready" },
             { id: "bark", name: "Bark", status: "ready" },
             { id: "apns", name: "Apple APNs", status: push.config.publicConfig().ready ? "ready" : "unconfigured" },
+            { id: "unifiedpush", name: "UnifiedPush", status: "ready" },
+            { id: "ntfy", name: "ntfy", status: "ready" },
+            { id: "webhook", name: "Webhook", status: "ready" },
+            { id: "fcm", name: "Firebase FCM", status: push.config.publicConfig().fcm?.ready ? "ready" : "unconfigured" },
           ],
         },
       });
@@ -457,7 +475,7 @@ export async function createSelfHostServer(options = {}) {
       "请求地址无效",
     );
     const path = request.url.split("?")[0];
-    const origin = originFor(request, network.isIngress(request) ? '' : canonical);
+    const origin = requestOrigin(request);
     delete request.headers['x-grokbot-tailcat-ingress'];
     const url = new URL(request.url, origin);
     if (path.startsWith("/admin/api/"))
@@ -604,6 +622,13 @@ export async function createSelfHostServer(options = {}) {
       const found = device(request);
       return sendJson(response, 200, request.method === "GET" ? push.get(found.id) : await push.register(found.id, await jsonBody(request)));
     }
+    if (request.method === "POST" && path === "/local/device/push/test") {
+      const found = device(request);
+      limiter.check(`local-push-test:${found.id}`, 10);
+      const body = await jsonBody(request);
+      if (body.agentId) await verifyAgent(body.agentId);
+      return sendJson(response, 200, await push.test(found.id, body.agentId || "grokbot-test", { bypassForeground: body.bypassForeground !== false }));
+    }
     if (request.method === "GET" && path === "/local/computers") {
       device(request);
       const status = options.computers?.() ?? { available: false, computers: [] }, computers = new Map(status.computers.map(item => [item.id, item]));
@@ -684,7 +709,7 @@ export async function createSelfHostServer(options = {}) {
       const found = device(request);
       connections.track(found.id, response);
       if (path.endsWith("/events")) {
-        if (found.platform === "ios" && request.headers["x-grokbot-foreground"] === "1")
+        if (["ios", "android"].includes(found.platform) && request.headers["x-grokbot-foreground"] === "1")
           push.trackForegroundStream(found.id, response);
         return notifications.subscribe(request, response);
       }
@@ -764,7 +789,7 @@ export async function createSelfHostServer(options = {}) {
         400,
         "Invalid upgrade",
       );
-      const origin = originFor(request, network.isIngress(request) ? '' : canonical);
+      const origin = requestOrigin(request);
       delete request.headers['x-grokbot-tailcat-ingress'];
       const url = new URL(request.url, origin);
       check(federation.role() === 'primary', 403, 'Connect to the primary Host');

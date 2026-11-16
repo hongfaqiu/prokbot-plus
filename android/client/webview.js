@@ -10,11 +10,14 @@ import { log } from './native.js';
 
 const FRAME_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-pointer-lock allow-modals';
 
-export function mapDesktopSource(src, { hostOrigin, vncOrigin, base = location.href }) {
+export function mapDesktopSource(src, { hostOrigin, vncOrigin, tailcat = false, base = location.href }) {
   try {
     const url = new URL(src, base);
-    const known = [hostOrigin, vncOrigin, new URL(base).origin].filter(Boolean);
-    if (!known.includes(url.origin) || !/^\/vnc\/(desktop|fork)\//.test(url.pathname)) return null;
+    const resolvedHost = typeof hostOrigin === 'function' ? hostOrigin() : hostOrigin;
+    const isTailcat = typeof tailcat === 'function' ? tailcat() : tailcat === true;
+    const known = [resolvedHost, vncOrigin, new URL(base).origin].filter(Boolean);
+    const loopbackTailcat = isTailcat && url.protocol === 'http:' && url.hostname === '127.0.0.1';
+    if ((!known.includes(url.origin) && !loopbackTailcat) || !/^\/vnc\/(desktop|fork)\//.test(url.pathname)) return null;
     const local = new URL(url.pathname + url.search, vncOrigin);
     // The page is plain HTTP on the phone even when the Host itself uses HTTPS.
     local.searchParams.set('encrypt', '0');
@@ -24,7 +27,7 @@ export function mapDesktopSource(src, { hostOrigin, vncOrigin, base = location.h
   }
 }
 
-export function installWebviewFrames({ hostOrigin, vncOrigin }) {
+export function installWebviewFrames({ hostOrigin, vncOrigin, tailcat = false }) {
   const frames = new Map();
   let nextId = 1;
   const pending = new Map();
@@ -71,7 +74,7 @@ export function installWebviewFrames({ hostOrigin, vncOrigin }) {
 
     const sync = () => {
       const src = element.getAttribute('src');
-      const target = src ? mapDesktopSource(src, { hostOrigin, vncOrigin }) : null;
+      const target = src ? mapDesktopSource(src, { hostOrigin, vncOrigin, tailcat }) : null;
       if (src && !target) log('[webview] blocked source', new URL(src, location.href).pathname);
       const next = target ?? 'about:blank';
       if (frame.dataset.src === next) return;

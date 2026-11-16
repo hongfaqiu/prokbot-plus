@@ -36,31 +36,86 @@ object Pairing {
         return name.take(80).ifEmpty { "Android" }
     }
 
-    fun pair(context: Context, address: String, pairingKey: String): Connection {
-        val server = normalizeServer(context, address)
+    fun pair(
+        context: Context,
+        address: String,
+        pairingKey: String,
+        tailcat: Boolean = false,
+        network: TailcatNetwork? = null,
+    ): Connection {
+        val pending = if (tailcat) {
+            val tunnel = network ?: throw PairingException(Text.t(context, "Tailcat 服务不可用。", "Tailcat is unavailable."))
+            tunnel.startPending(context, address)
+        } else {
+            null
+        }
+        val server = pending?.localUrl ?: normalizeServer(context, address)
         val key = halfWidth(pairingKey).uppercase()
-        if (key.isEmpty()) throw PairingException(Text.t(context, "请输入配对码。", "Enter a pairing code."))
+        if (key.isEmpty()) {
+            network?.dropPending(pending)
+            throw PairingException(Text.t(context, "请输入配对码。", "Enter a pairing code."))
+        }
         val body = JSONObject().put("pairingKey", key).put("deviceName", deviceName(context)).put("platform", "desktop").put("clientKind", "android")
         val (status, reply) = try {
-            request("$server/connect/pair", "POST", body.toString(), null)
-        } catch (_: Exception) {
+            request("$server/connect/pair", "POST", body.toString(), null, readTimeoutMs = if (tailcat) 45_000 else 35_000)
+        } catch (error: Exception) {
+            android.util.Log.w("GrokBotPairing", "Pair request failed (tailcat=$tailcat)", error)
+            network?.dropPending(pending)
             throw PairingException(Text.t(context, "无法连接 Host，请检查地址和网络。", "Cannot reach the Host. Check the address and network."))
         }
-        if (status !in 200..299) throw PairingException(
-            if (status == 401) Text.t(context, "配对码无效或已过期。", "Pairing code is invalid or expired.")
-            else Text.t(context, "连接失败（HTTP $status）。", "Connection failed (HTTP $status)."))
+        if (status !in 200..299) {
+            network?.dropPending(pending)
+            throw PairingException(
+                if (status == 401) Text.t(context, "配对码无效或已过期。", "Pairing code is invalid or expired.")
+                else Text.t(context, "连接失败（HTTP $status）。", "Connection failed (HTTP $status)."),
+            )
+        }
         val token = reply?.optString("token").orEmpty()
         val deviceId = reply?.optString("deviceId").orEmpty()
-        if (token.length < 16 || deviceId.isEmpty())
+        if (token.length < 16 || deviceId.isEmpty()) {
+            network?.dropPending(pending)
             throw PairingException(Text.t(context, "Host 返回的设备凭证无效。", "Host returned invalid device credentials."))
-        val gateway = try { normalizeServer(context, reply?.optString("gatewayUrl").orEmpty()) } catch (_: Exception) { "" }
-        if (gateway != server)
-            throw PairingException(Text.t(context, "Host 返回了不同的服务地址。", "Host returned a different server address."))
-        return Connection(server, deviceId, token)
+        }
+        if (!tailcat) {
+            val gateway = try { normalizeServer(context, reply?.optString("gatewayUrl").orEmpty()) } catch (_: Exception) { "" }
+            if (gateway != server)
+                throw PairingException(Text.t(context, "Host 返回了不同的服务地址。", "Host returned a different server address."))
+            network?.clear()
+            return Connection(server, deviceId, token)
+        }
+        network!!.commitPending(pending!!)
+        return Connection(pending.link, deviceId, token, tailcat = true, networkIdentity = pending.identityJson)
     }
 
     /** A saved device credential is valid only at its originally paired origin. */
-    fun verify(context: Context, address: String, current: Connection): Connection {
+    fun verify(context: Context, address: String, current: Connection): Connection =
+        verify(context, address, current, tailcat = false, network = null)
+
+    fun verify(
+        context: Context,
+        address: String,
+        current: Connection,
+        tailcat: Boolean,
+        network: TailcatNetwork?,
+    ): Connection {
+        if (tailcat != current.tailcat)
+            throw PairingException(Text.t(context, "更换 Host 地址须使用新 Host 的配对码。", "Enter a new pairing code to change Host."))
+        if (tailcat) {
+            val tunnel = network ?: throw PairingException(Text.t(context, "Tailcat 服务不可用。", "Tailcat is unavailable."))
+            val link = tunnel.normalizeLink(context, address)
+            if (link != tunnel.normalizeLink(context, current.server))
+                throw PairingException(Text.t(context, "更换 Host 地址须使用新 Host 的配对码。", "Enter a new pairing code to change Host."))
+            val pending = tunnel.startPending(context, link, reuseIdentity = current.networkIdentity)
+            val status = try {
+                request("${pending.localUrl}/connect/status", "GET", null, current.token, readTimeoutMs = 45_000).first
+            } catch (_: Exception) { 0 }
+            if (status !in 200..299) {
+                tunnel.dropPending(pending)
+                throw PairingException(Text.t(context, "无法验证此 Host 的设备凭据。", "Could not verify this device with the Host."))
+            }
+            tunnel.commitPending(pending)
+            return current.copy(server = link, tailcat = true, networkIdentity = pending.identityJson)
+        }
         val server = normalizeServer(context, address)
         if (server != normalizeServer(context, current.server))
             throw PairingException(Text.t(context, "更换 Host 地址须使用新 Host 的配对码。", "Enter a new pairing code to change Host."))
@@ -70,12 +125,18 @@ object Pairing {
         return current.copy(server = server)
     }
 
-    private fun request(url: String, method: String, body: String?, token: String?): Pair<Int, JSONObject?> {
+    private fun request(
+        url: String,
+        method: String,
+        body: String?,
+        token: String?,
+        readTimeoutMs: Int = 35_000,
+    ): Pair<Int, JSONObject?> {
         val connection = URL(url).openConnection() as HttpURLConnection
         try {
             connection.instanceFollowRedirects = false
             connection.connectTimeout = 15_000
-            connection.readTimeout = 35_000
+            connection.readTimeout = readTimeoutMs
             connection.requestMethod = method
             connection.setRequestProperty("Accept", "application/json")
             if (token != null) connection.setRequestProperty("Authorization", "Bearer $token")

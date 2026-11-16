@@ -21,16 +21,17 @@ export class HttpError extends Error {
 export function check(condition, status, message) {
   if (!condition) throw new HttpError(status, message);
 }
+const MIN_ADMIN_PASSWORD_LENGTH = 8;
 export async function passwordHash(
   password,
   salt = randomBytes(16).toString("hex"),
 ) {
   check(
     typeof password === "string" &&
-      password.length >= 12 &&
+      password.length >= MIN_ADMIN_PASSWORD_LENGTH &&
       password.length <= 128,
     400,
-    "管理员密码需要 12–128 个字符",
+    `管理员密码需要 ${MIN_ADMIN_PASSWORD_LENGTH}–128 个字符`,
   );
   const key = await scrypt(password, salt, 64, {
     N: 32768,
@@ -43,7 +44,7 @@ export async function passwordHash(
 export async function verifyPassword(password, saved) {
   if (
     typeof password !== "string" ||
-    password.length < 12 ||
+    password.length < MIN_ADMIN_PASSWORD_LENGTH ||
     password.length > 128
   )
     return false;

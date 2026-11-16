@@ -20,6 +20,7 @@ import { mintVoiceCredential, createVoiceAvailability } from './voice.mjs';
 import { externalHttpUrl } from './external-url.mjs';
 import { installExternalLinks } from './external-links.mjs';
 import { auth, boot, theme, language, experiments, createLocalServices, probeLocalMethod } from './local-services.mjs';
+import { createDesktopUpdater, loadDesktopUpdateConfig } from './updater.mjs';
 
 const clientRoot = path.dirname(fileURLToPath(import.meta.url));
 const payload = path.join(clientRoot, '../dist');
@@ -183,8 +184,22 @@ async function showWorkspace() {
     onUnauthorized: unauthorized });
   const uploads = createAttachmentUploads({ profile, command: gateway.command,
     onProgress: progress => { if (!win.isDestroyed()) win.webContents.send('dune-rpc:main:e:attachment-commit-progress', progress); } });
+  const updater = createDesktopUpdater({
+    appVersion: app.getVersion(),
+    profileDir: profile,
+    config: await loadDesktopUpdateConfig({ resourcesDir: process.resourcesPath, profileDir: profile }),
+    onStatus: status => { if (!win.isDestroyed()) win.webContents.send('dune-rpc:main:e:update-status', status); },
+    onInstallFile: async file => {
+      const openError = await shell.openPath(file);
+      if (openError) throw new Error(openError);
+      app.quit();
+    },
+  });
+  if (updater.status().delivery === 'in-app' && updater.status().autoUpdateWhenIdle) {
+    void updater.check();
+  }
   methodCall = await createLocalServices(profile, win, {
-    appVersion: app.getVersion(), persistence,
+    appVersion: app.getVersion(), persistence, updater,
     command: gateway.command, request: gateway.request, connection: showConnection, openExternal,
     attachmentHandlers: { ...uploads.handlers, ...createAttachmentHandlers({
       command: gateway.command,

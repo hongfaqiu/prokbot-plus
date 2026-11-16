@@ -24,11 +24,13 @@ async function existingTarget(target, force) {
 
 // Reject overlaps before creating the key or modifying the output directory.
 export async function checkBuildOutput({ source, shell, key, targets, force }) {
-  const [original, shellFile, keyFile] = await Promise.all([source, shell, key].map(canonical));
-  if (inside(original, keyFile) || inside(shellFile, keyFile)) throw new Error('签名密钥位置与输入重叠。');
+  const [original, shellFile] = await Promise.all([source, shell].map(canonical));
+  const keyFile = key ? await canonical(key) : null;
+  if (keyFile && (inside(original, keyFile) || inside(shellFile, keyFile))) throw new Error('签名密钥位置与输入重叠。');
+  const inputs = keyFile ? [original, shellFile, keyFile] : [original, shellFile];
   for (const target of targets) {
     const file = await canonical(target);
-    if ([original, shellFile, keyFile].some(input => inside(input, file) || inside(file, input)))
+    if (inputs.some(input => inside(input, file) || inside(file, input)))
       throw new Error(`输出位置与输入或签名密钥重叠：${target}`);
     await existingTarget(target, force);
   }
