@@ -11,6 +11,9 @@ const VALID_TRANSPORT_KINDS = new Set([
 ]);
 // Replies and events that carry the address of a Bot computer.
 const DESKTOP_METHODS = new Set(['getForeverBoxStatus', 'ensureForeverBox', 'getSubagents']);
+// Reads the interface waits for before its first paint, and how long a slow Host may take.
+const BOOT_READ_METHODS = new Set(['getHostSettings', 'getMcpState', 'listAgents']);
+const BOOT_READ_TIMEOUT_MS = 8000;
 
 export function desktopSlot(address) {
   try { return /^\/vnc\/(desktop|fork)\//.exec(new URL(address, globalThis.location?.href).pathname)?.[1] ?? null; }
@@ -210,6 +213,11 @@ export function createGateway({ onUnauthorized, onConnected, onStateChanged, str
     // The Host keeps no read receipts for transcripts and has no pending lessons to offer.
     if (method === 'noteTranscriptOpened') return null;
     if (method === 'takeTeachLearningPrompts') return [];
+    // The interface reads these once before it paints. With a slow Host they would otherwise
+    // hold the whole screen blank for the shell's full request timeout; failing earlier lets
+    // it show its own "couldn't load" state with a retry instead.
+    const bootGuard = BOOT_READ_METHODS.has(method) ? combineSignals([signal, timeout(BOOT_READ_TIMEOUT_MS)]) : null;
+    if (bootGuard) signal = bootGuard.signal;
     const transientRetry = async () => {
       try {
         return await request(`/api/${encodeURIComponent(method)}`, args, signal);
@@ -223,9 +231,11 @@ export function createGateway({ onUnauthorized, onConnected, onStateChanged, str
         throw error;
       }
     };
-    const value = await transientRetry();
-    if (DESKTOP_METHODS.has(method)) noteDesktops(value, args?.id);
-    return value;
+    try {
+      const value = await transientRetry();
+      if (DESKTOP_METHODS.has(method)) noteDesktops(value, args?.id);
+      return value;
+    } finally { bootGuard?.dispose(); }
   }
 
   /** A ticket for the desktop slot that is valid now, or null when the Bot computer is not running. */

@@ -333,19 +333,20 @@
       var error = event.error, place = event.filename ? ' @ ' + String(event.filename).split('/').pop() + ':' + event.lineno : '';
       remember((event.message || (error && error.name ? error.name + ': ' + error.message : error)) + place);
     }
-    schedule(1500);
+    schedule(1500, true);
   }, true);
   global.addEventListener('unhandledrejection', function (event) {
     var reason = event.reason;
     remember(reason && reason.message ? (reason.name ? reason.name + ': ' : '') + reason.message : reason);
-    schedule(1500);
+    schedule(1500, true);
   });
   global.addEventListener('securitypolicyviolation', function (event) {
     remember('CSP blocked ' + (event.violatedDirective || '') + ' ' + (event.blockedURI || ''));
-    schedule(1500);
+    schedule(1500, true);
   });
 
-  var overlay = null, timer = null, mounted = false;
+  var overlay = null, timer = null, mounted = false, splash = null, poller = null;
+  var startedAt = Date.now();
   // The interface renders into #root; the pairing page sets __grokbotStarted after its first render.
   function root() { return document.getElementById('root'); }
   function rootEmpty() {
@@ -355,19 +356,51 @@
     return element.children.length === 1 && element.firstElementChild.children.length === 0 && !String(element.textContent || '').trim();
   }
 
-  function schedule(delay) {
+  // A blank root is not a failure by itself: the interface waits for the Host before it paints,
+  // and a slow connection (a tunnel that is still starting, a weak network) can keep it blank
+  // for a while. Without a recorded error it first shows a quiet "connecting" note that never
+  // blocks touches, and calls it a failure only after a long wait. Both notes go away by
+  // themselves as soon as the interface has content, however deep in #root it appears.
+  var SLOW_START_MS = 3000, GIVE_UP_MS = 30000, PAGE_GIVE_UP_MS = 8000;
+
+  // `force`: the delay already followed a recorded error, so a blank page may be reported at once.
+  function schedule(delay, force) {
     if (timer) clearTimeout(timer);
-    timer = setTimeout(check, delay);
+    timer = setTimeout(function () { check(force === true); }, delay);
   }
 
-  function check() {
+  function removeNode(node) { if (node && node.parentNode) node.parentNode.removeChild(node); }
+
+  function check(force) {
     timer = null;
     if (!rootEmpty()) {
       mounted = true;
-      if (overlay) { overlay.parentNode && overlay.parentNode.removeChild(overlay); overlay = null; }
+      removeNode(overlay); overlay = null;
+      removeNode(splash); splash = null;
       return;
     }
-    show();
+    var waited = Date.now() - startedAt;
+    var broken = (chromium && chromium < MINIMUM_CHROMIUM) || errors.length > 0;
+    var limit = root() ? GIVE_UP_MS : PAGE_GIVE_UP_MS;
+    if (broken ? force === true || Date.now() - lastErrorAt >= 1500 || waited >= limit : waited >= limit) {
+      removeNode(splash); splash = null;
+      show();
+    } else if (!broken && waited >= SLOW_START_MS && root()) {
+      showSplash();
+    }
+  }
+
+  function showSplash() {
+    if (splash || overlay || !document.body) return;
+    var dark = boot.systemDark === true;
+    splash = document.createElement('div');
+    splash.id = 'grokbot-compat-splash';
+    splash.setAttribute('role', 'status');
+    splash.style.cssText = 'position:fixed;left:0;right:0;top:0;bottom:0;z-index:2147483646;pointer-events:none;' +
+      'display:flex;align-items:center;justify-content:center;font:15px/1.6 system-ui,sans-serif;opacity:.7;' +
+      (dark ? 'color:#eee' : 'color:#444');
+    splash.textContent = t('正在连接 Host…', 'Connecting to your Host…');
+    document.body.appendChild(splash);
   }
 
   function show() {
@@ -422,10 +455,12 @@
   function watch() {
     var element = root();
     if (element && typeof MutationObserver === 'function') {
-      new MutationObserver(function () { schedule(element.firstChild ? 0 : 1500); }).observe(element, { childList: true });
+      new MutationObserver(function () { schedule(mounted ? 500 : 0); }).observe(element, { childList: true, subtree: true });
     }
-    // Below the minimum the module never runs; otherwise allow a slow phone time to parse.
-    schedule(chromium && chromium < MINIMUM_CHROMIUM ? 1500 : 8000);
+    // Content can appear deep inside a single child of #root without any change to #root itself,
+    // so keep looking while the page is up; this is a few cheap property reads per second.
+    if (!poller && typeof global.setInterval === 'function') poller = global.setInterval(function () { if (!timer) check(); }, 1000);
+    schedule(chromium && chromium < MINIMUM_CHROMIUM ? 1500 : 1000);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watch); else watch();
 })();

@@ -679,3 +679,18 @@ test('swipeReplyDisplacement, timestampPeekAmount and findReplyActionButton hand
   assert.equal(findReplyActionButton(null), null);
 });
 
+
+test('boot reads give up after a bounded wait instead of holding the interface blank', async t => {
+  t.mock.method(AbortSignal, 'timeout', () => AbortSignal.abort(new DOMException('Timed out', 'TimeoutError')));
+  const seen = [];
+  t.mock.method(globalThis, 'fetch', async (endpoint, init) => {
+    seen.push(endpoint);
+    if (init.signal.aborted) throw init.signal.reason;
+    return new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)));
+  });
+  const gateway = client.gateway.createGateway();
+  await assert.rejects(gateway.command('getHostSettings'), /Timed out/);
+  await assert.rejects(gateway.command('getMcpState'), /Timed out/);
+  await assert.rejects(gateway.command('listAgents'), /Timed out/);
+  assert.deepEqual(seen, ['/api/getHostSettings', '/api/getMcpState', '/api/listAgents']);
+});

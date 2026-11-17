@@ -196,3 +196,68 @@ test('compat overlay triggers even when root becomes blank after initial mount',
   assert.ok(overlayShown);
   assert.match(context.__grokbotCompat.errors[0], /CSP blocked script-src inline/);
 });
+
+test('a slow start shows a quiet connecting note, reports failure only after a long wait, and clears itself when content appears', () => {
+  function environment() {
+    let now = 1_000_000;
+    const fakeElement = (id = '') => ({
+      id, tagName: 'DIV', style: { cssText: '' }, children: [], firstChild: null, firstElementChild: null, parentNode: null,
+      textContent: '', attrs: {}, setAttribute(k, v) { this.attrs[k] = v; },
+      appendChild(child) {
+        child.parentNode = this; this.children.push(child);
+        this.firstChild = this.firstElementChild = this.children[0];
+        return child;
+      },
+      removeChild(child) {
+        const index = this.children.indexOf(child);
+        if (index >= 0) this.children.splice(index, 1);
+        child.parentNode = null;
+        this.firstChild = this.firstElementChild = this.children[0] ?? null;
+      },
+      addEventListener() {},
+    });
+    const rootNode = fakeElement('root'), inner = fakeElement(), body = fakeElement('body');
+    rootNode.appendChild(inner);
+    const timers = [];
+    let poll = null;
+    const context = vm.createContext({
+      navigator: { userAgent: 'Chrome/157.0.0.0', language: 'zh-CN' },
+      __grokbotAndroidBoot: { locale: 'zh-CN' },
+      Date: { now: () => now },
+      setTimeout(fn, delay) { const h = { fn, delay, cleared: false }; timers.push(h); return h; },
+      clearTimeout(h) { if (h) h.cleared = true; },
+      setInterval(fn) { poll = fn; return 1; },
+      addEventListener() {}, removeEventListener() {},
+      document: { readyState: 'complete', body, getElementById: id => (id === 'root' ? rootNode : null), createElement: () => fakeElement() },
+    });
+    context.window = context;
+    vm.runInContext(source, context, { filename: 'compat.js' });
+    const tick = () => {
+      const pending = timers.filter(h => !h.cleared).pop();
+      if (pending) { pending.cleared = true; pending.fn(); } else poll();
+    };
+    const shown = () => body.children.map(child => child.id);
+    return { inner, fakeElement, tick, shown, advance: ms => { now += ms; } };
+  }
+
+  const slow = environment();
+  slow.advance(1000); slow.tick();
+  assert.deepEqual(slow.shown(), []);
+  slow.advance(3000); slow.tick();
+  assert.deepEqual(slow.shown(), ['grokbot-compat-splash']);
+  slow.advance(12000); slow.tick();
+  assert.deepEqual(slow.shown(), ['grokbot-compat-splash']);
+  // The interface paints inside the single child of #root: nothing about #root itself changes.
+  slow.inner.appendChild(slow.fakeElement());
+  slow.advance(1000); slow.tick();
+  assert.deepEqual(slow.shown(), []);
+
+  const stuck = environment();
+  stuck.advance(4000); stuck.tick();
+  assert.deepEqual(stuck.shown(), ['grokbot-compat-splash']);
+  stuck.advance(30000); stuck.tick();
+  assert.deepEqual(stuck.shown(), ['grokbot-compat-message']);
+  stuck.inner.appendChild(stuck.fakeElement());
+  stuck.advance(1000); stuck.tick();
+  assert.deepEqual(stuck.shown(), []);
+});

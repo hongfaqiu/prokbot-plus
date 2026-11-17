@@ -12,7 +12,7 @@ Windows · macOS · iOS 客户端补丁 ｜ [自开发 Android App（非官方�
   <a href="#client-versions"><img alt="Windows 补丁接受 1.1.0 x64（推荐）、0.71.2" src="https://img.shields.io/badge/Windows%20%E8%A1%A5%E4%B8%81%E6%8E%A5%E5%8F%97-1.1.0%20x64%EF%BC%88%E6%8E%A8%E8%8D%90%EF%BC%89%E3%80%810.71.2-237E55?logo=windows&logoColor=white"></a>
   <a href="#client-versions"><img alt="macOS 官方 1.1.0 ARM64" src="https://img.shields.io/badge/macOS%20%E5%AE%98%E6%96%B9-1.1.0%20ARM64-111111?logo=apple&logoColor=white"></a>
   <a href="#client-versions"><img alt="iOS 官方 1.25.0" src="https://img.shields.io/badge/iOS%20%E5%AE%98%E6%96%B9-1.25.0-111111?logo=apple&logoColor=white"></a>
-  <a href="#client-versions"><img alt="Android shell 1.2.10" src="https://img.shields.io/badge/%E8%87%AA%E5%BC%80%E5%8F%91%20Android-1.2.10-237E55?logo=android&logoColor=white"></a>
+  <a href="#client-versions"><img alt="Android shell 1.2.11" src="https://img.shields.io/badge/%E8%87%AA%E5%BC%80%E5%8F%91%20Android-1.2.11-237E55?logo=android&logoColor=white"></a>
 <!-- client-badges:end -->
   <img alt="Host d0a4baa" src="https://img.shields.io/badge/Host-d0a4baa-2496ED?logo=docker&logoColor=white">
   <img alt="Noncommercial License" src="https://img.shields.io/badge/License-Noncommercial-6B7280">
@@ -110,7 +110,7 @@ Grok Bot 是 xAI 的 AI 助手应用，有 Windows、Mac、iPhone 等客户端�
 | Windows x64 | [1.1.0](https://api2.cursor.sh/updates/api/download/stable/win32-x64-user/sand) | **1.1.0**（推荐）；用不了再用 0.71.2 |
 | macOS ARM64 | [1.1.0](https://api2.cursor.sh/updates/api/download/stable/darwin-arm64/sand) | 0.71.2（尚未适配 1.1.0；未在 Mac 真机上测试） |
 | iOS | [1.25.0](https://apps.apple.com/us/app/grok-bot/id6794501026) | 1.16.0（构建 23152；未在 iPhone / iPad 上测试） |
-| Android 9+（自开发，非官方） | 不用官方 Android 版 | App **1.2.10**（构建 10210），界面取自 Windows **1.1.0** 安装包（推荐；用不了再用 0.71.2） |
+| Android 9+（自开发，非官方） | 不用官方 Android 版 | App **1.2.11**（构建 10211），界面取自 Windows **1.1.0** 安装包（推荐；用不了再用 0.71.2） |
 | Linux 服务端 | 不适用 | Host `d0a4baa`；Bot 的电脑 `9d2ac1b`（x86_64） |
 
 ProkBot Plus 自己的版本号见[最新发布](https://github.com/ferretgeek/prokbot-plus/releases/latest)；上游 ProkBot 基线是 `3e9fe8c`。

@@ -300,6 +300,18 @@ export function createProfile({ request, server, emit, onChange }) {
   const refreshIdentity = async () => {
     try { await refresh(); } catch (error) { if (error.httpStatus === 401) throw error; }
   };
+  // The interface waits for the account answers before it paints anything. A slow or
+  // half-connected Host (for example a Tailcat tunnel still starting) must not keep the
+  // screen blank for the whole request timeout: answer with what is known after a moment
+  // and let `cursor-auth-changed` (emitted by apply) update the account when it arrives.
+  const refreshIdentityQuickly = async (ms = 1500) => {
+    const pendingRefresh = refreshIdentity();
+    pendingRefresh.catch(() => {});
+    let timer;
+    try {
+      await Promise.race([pendingRefresh, new Promise(resolve => { timer = setTimeout(resolve, ms); })]);
+    } finally { clearTimeout(timer); }
+  };
   let updates = Promise.resolve();
   const update = value => {
     updates = updates.catch(() => {}).then(async () => {
@@ -313,8 +325,8 @@ export function createProfile({ request, server, emit, onChange }) {
     refresh,
     current: () => current && { ...current },
     handlers: {
-      getCursorAuthStatus: async () => { await refreshIdentity(); return { ...auth }; },
-      getCursorAvatar: async () => { await refreshIdentity(); return avatar; },
+      getCursorAuthStatus: async () => { await refreshIdentityQuickly(); return { ...auth }; },
+      getCursorAvatar: async () => { await refreshIdentityQuickly(); return avatar; },
       updateCursorAccountName: ({ name }) => update({ displayName: name }),
       updateCursorProfilePhoto: ({ photo }) => update({ avatarDataUrl: `data:${photo.contentType};base64,${toBase64(photo.bytes)}` }),
       getLocalAccountServer: () => server,
