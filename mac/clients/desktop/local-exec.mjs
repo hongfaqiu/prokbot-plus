@@ -7,6 +7,7 @@ import os from 'node:os';
 import { createNativeComputer } from './native-computer.mjs';
 import { startNativeProvider } from './native-provider.mjs';
 import { createCodexBridge } from './codex-bridge.mjs';
+import { fetchSandMachines } from './sand-machines.mjs';
 
 // The 0.71.2 Windows daemon runs commands in Windows PowerShell without its own UTF-8 console
 // option, so output in the OEM code page (for example Chinese text) is decoded as UTF-8 and garbled.
@@ -28,7 +29,7 @@ export function loadLocalExecDaemon(file, platform = process.platform) {
   return daemon.exports;
 }
 
-export async function createLocalExec({ payload, profile, config, command, window }) {
+export async function createLocalExec({ payload, profile, config, command, request, window }) {
   const original = loadLocalExecDaemon(path.join(payload, 'local-exec-daemon/main.cjs'));
   const directory = path.join(profile, 'local-exec');
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -98,8 +99,20 @@ export async function createLocalExec({ payload, profile, config, command, windo
         await save(approvalsPath, { approvals: [...entries.filter(item => item.id !== record.id), record].slice(-500) });
       }),
       clearLocalToolApprovals: () => serialize(async () => { await rm(approvalsPath, { force: true }); await rm(retirementsPath, { force: true }); }),
-      getSandMachines: () => ({ machines: [{ machineId, name: os.hostname(), label: os.hostname(), platform: process.platform,
-        isCurrent: true, localToolPermission: permission, isOnline: Boolean(provider.providerId) }], currentMachineRemoved: false }),
+      getSandMachines: () => fetchSandMachines({
+        request,
+        signal: AbortSignal.timeout(10000),
+        currentMachine: {
+          machineId,
+          name: os.hostname(),
+          label: os.hostname(),
+          platform: process.platform,
+          isCurrent: true,
+          localToolPermission: permission,
+          isOnline: Boolean(provider.providerId),
+          connected: Boolean(provider.providerId),
+        },
+      }),
       getLocalExecutionStatus: () => ({ connected: Boolean(provider.providerId), machineId, root, permission }),
     },
   };

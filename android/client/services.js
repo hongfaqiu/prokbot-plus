@@ -5,6 +5,7 @@ import { grokText } from './desktop/i18n.mjs';
 import { externalHttpUrl } from './desktop/external-url.mjs';
 import { createConnectorHandlers } from './desktop/connectors.mjs';
 import { createDictation } from './desktop/dictation.mjs';
+import { fetchSandMachines } from './desktop/sand-machines.mjs';
 import { boot as androidBoot, native, log, toBase64, fromBase64, toBytes, timeout, combineSignals } from './native.js';
 
 export const auth = {
@@ -583,7 +584,7 @@ export function createServices(context) {
     listMessagesAllowedRecipients: () => [],
     listComputerUseAllowedApps: () => [],
     attachProdBoxStatus: () => ({ enabled: false }),
-    getSandMachines: () => ({ machines: [], currentMachineRemoved: false }),
+    getSandMachines: () => fetchSandMachines({ request, signal: timeout(5000) }),
     getLocalToolPermission: () => 'never',
     setLocalToolPermission: unavailable,
     recordLocalToolApproval: unavailable,

@@ -104,7 +104,7 @@ test('bridge resume emits window-focus catchup, calls native resume, and wires u
   for (const name of ['bridge.js', 'native.js', 'services.js', 'gateway.js', 'layout.js', 'webview.js', 'anchor-fallback.js']) {
     await copyFile(new URL(`../client/${name}`, import.meta.url), join(dir, name));
   }
-  for (const name of ['i18n.mjs', 'connectors.mjs', 'external-url.mjs', 'dictation.mjs']) {
+  for (const name of ['i18n.mjs', 'connectors.mjs', 'external-url.mjs', 'dictation.mjs', 'sand-machines.mjs']) {
     await copyFile(new URL(`../../mac/clients/desktop/${name}`, import.meta.url), join(dir, 'desktop', name));
   }
   await writeFile(join(dir, 'official-preload.js'), wrapPreload(`
@@ -261,7 +261,7 @@ test('bridge resume awaits native Tailcat recovery before emitting window-focus 
   for (const name of ['bridge.js', 'native.js', 'services.js', 'gateway.js', 'layout.js', 'webview.js', 'anchor-fallback.js']) {
     await copyFile(new URL(`../client/${name}`, import.meta.url), join(dir, name));
   }
-  for (const name of ['i18n.mjs', 'connectors.mjs', 'external-url.mjs', 'dictation.mjs']) {
+  for (const name of ['i18n.mjs', 'connectors.mjs', 'external-url.mjs', 'dictation.mjs', 'sand-machines.mjs']) {
     await copyFile(new URL(`../../mac/clients/desktop/${name}`, import.meta.url), join(dir, 'desktop', name));
   }
   await writeFile(join(dir, 'official-preload.js'), wrapPreload(`

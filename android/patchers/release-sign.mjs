@@ -2,9 +2,16 @@
 // Release signing and ECDSA P-256 update-manifest helpers for ProkBot Plus.
 // Zero external dependencies; can run locally or on a dedicated signing server.
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto';
-import { chmod, copyFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import {
+  canonicalAndroidDeltasPayload,
+  canonicalDesktopDeltasPayload,
+  createDeltaBuffer,
+  readAsarHeaderInfo,
+  sha256File,
+} from '../../mac/clients/shared/delta.mjs';
 import { certificateFingerprint, entryBytes, readZip, signApk, verifyApk } from './apk.mjs';
 import { readShellManifest } from './shell-version.mjs';
 
@@ -119,6 +126,45 @@ export function verifyDesktopUpdateManifest(manifest, publicKeySpkiBase64) {
   return manifest;
 }
 
+function signDeltasWith(canonicalFn, manifest, privateKey) {
+  const key = typeof privateKey === 'string' ? createPrivateKey(privateKey) : privateKey;
+  const canonical = canonicalFn(manifest);
+  const deltasSignature = sign('sha256', Buffer.from(canonical, 'utf8'), key).toString('base64');
+  return { ...manifest, deltasSignature };
+}
+
+function verifyDeltasWith(canonicalFn, manifest, publicKeySpkiBase64, label) {
+  if (!manifest || typeof manifest.deltasSignature !== 'string' || !manifest.deltasSignature) {
+    throw new Error(`${label} deltasSignature missing`);
+  }
+  const spki = Buffer.from(normalizeEcPublicKey(publicKeySpkiBase64), 'base64');
+  const key = createPublicKey({ key: spki, format: 'der', type: 'spki' });
+  const ok = verify(
+    'sha256',
+    Buffer.from(canonicalFn(manifest), 'utf8'),
+    key,
+    Buffer.from(manifest.deltasSignature, 'base64'),
+  );
+  if (!ok) throw new Error(`${label} deltasSignature invalid`);
+  return manifest;
+}
+
+export function signAndroidDeltas(manifest, privateKey) {
+  return signDeltasWith(canonicalAndroidDeltasPayload, manifest, privateKey);
+}
+
+export function verifyAndroidDeltas(manifest, publicKeySpkiBase64) {
+  return verifyDeltasWith(canonicalAndroidDeltasPayload, manifest, publicKeySpkiBase64, 'Android');
+}
+
+export function signDesktopDeltas(manifest, privateKey) {
+  return signDeltasWith(canonicalDesktopDeltasPayload, manifest, privateKey);
+}
+
+export function verifyDesktopDeltas(manifest, publicKeySpkiBase64) {
+  return verifyDeltasWith(canonicalDesktopDeltasPayload, manifest, publicKeySpkiBase64, 'Desktop');
+}
+
 async function writeAtomic(target, bytes) {
   await mkdir(path.dirname(target), { recursive: true });
   const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
@@ -131,6 +177,23 @@ async function cli() {
   const arg = name => {
     const i = rest.indexOf(name);
     return i >= 0 ? rest[i + 1] : null;
+  };
+  const argsList = name => {
+    const out = [];
+    for (let i = 0; i < rest.length; i++) {
+      if (rest[i] === name && rest[i + 1]) out.push(rest[++i]);
+    }
+    return out;
+  };
+  const autoScanPrev = async (dir, matcher, excludePath) => {
+    const excluded = path.resolve(excludePath);
+    const entries = await readdir(dir).catch(() => []);
+    return entries
+      .filter(matcher)
+      .map(name => path.join(dir, name))
+      .filter(full => path.resolve(full) !== excluded)
+      .sort()
+      .slice(-3);
   };
   if (!command || command === '--help' || rest.includes('--help')) {
     console.log(`Usage:
@@ -173,6 +236,24 @@ async function cli() {
     return;
   }
 
+  const writeFileDelta = async ({ prevPath, targetBytes, targetSha, prefix, deltasDir, baseUrl }) => {
+    const prevBytes = await readFile(prevPath);
+    const prevSha = sha256Hex(prevBytes);
+    if (prevSha === targetSha) return null;
+    const deltaBytes = createDeltaBuffer(prevBytes, targetBytes);
+    if (deltaBytes.length >= targetBytes.length) return null;
+    const deltaSha = sha256Hex(deltaBytes);
+    const deltaName = `${prefix}-${prevSha.slice(0, 12)}-to-${targetSha.slice(0, 12)}.gbdelta`;
+    await writeAtomic(path.join(deltasDir, deltaName), deltaBytes);
+    return {
+      baseSha256: prevSha,
+      baseSize: prevBytes.length,
+      sha256: deltaSha,
+      size: deltaBytes.length,
+      url: `${baseUrl}/deltas/${deltaName}`,
+    };
+  };
+
   if (command === 'publish-android') {
     const apkPath = path.resolve(arg('--apk') ?? '');
     const outDir = path.resolve(arg('--out-dir') ?? '');
@@ -193,6 +274,10 @@ async function cli() {
     const filename = `GrokBotLocal-${manifest.versionName}-android.apk`;
     const destApk = path.join(outDir, filename);
     await mkdir(outDir, { recursive: true });
+    const prevApks = argsList('--prev-apk').map(p => path.resolve(p));
+    const baseApks = prevApks.length > 0
+      ? prevApks
+      : await autoScanPrev(outDir, n => /^GrokBotLocal-.*-android\.apk$/i.test(n), destApk);
     if (path.resolve(apkPath) !== destApk) await copyFile(apkPath, destApk);
 
     const keyInfo = await loadManifestSigningKey(manifestKeyPath);
@@ -202,22 +287,40 @@ async function cli() {
         throw new Error('APK embedded updatePublicKey does not match --manifest-key');
       }
     }
+    const targetSha = sha256Hex(apkBytes);
     const certificateSha256 = sha256Hex(verified.raw).toLowerCase();
     const publishedAt = new Date().toISOString();
     const feedName = track === 'stable' ? 'android.json' : `android-${track}.json`;
-    const signedManifest = signAndroidUpdateManifest({
+    const deltasDir = path.join(outDir, 'deltas');
+    const deltas = [];
+    for (const prevPath of baseApks) {
+      const entry = await writeFileDelta({
+        prevPath,
+        targetBytes: apkBytes,
+        targetSha,
+        prefix: `android-${manifest.versionName}`,
+        deltasDir,
+        baseUrl,
+      }).catch(() => null);
+      if (entry) deltas.push(entry);
+    }
+    let signedManifest = signAndroidUpdateManifest({
       track,
       packageName: manifest.packageName,
       versionName: manifest.versionName,
       versionCode: manifest.versionCode,
       rendererVersion: buildRecord.rendererVersion ?? '',
-      sha256: sha256Hex(apkBytes),
+      sha256: targetSha,
       size: apkBytes.length,
       certificateSha256,
       url: `${baseUrl}/${filename}`,
       publishedAt,
       ...(notes ? { notes } : {}),
     }, keyInfo.privateKey);
+    if (deltas.length > 0) {
+      signedManifest = signAndroidDeltas({ ...signedManifest, deltas }, keyInfo.privateKey);
+      verifyAndroidDeltas(signedManifest, keyInfo.publicKeySpkiBase64);
+    }
     verifyAndroidUpdateManifest(signedManifest, keyInfo.publicKeySpkiBase64);
     await writeAtomic(path.join(outDir, feedName), JSON.stringify(signedManifest, null, 2) + '\n');
     console.log(JSON.stringify({ published: true, feed: feedName, apk: destApk, manifest: signedManifest, publicKeySpkiBase64: keyInfo.publicKeySpkiBase64 }, null, 2));
@@ -241,18 +344,74 @@ async function cli() {
     const filename = path.basename(filePath);
     const destFile = path.join(outDir, filename);
     await mkdir(outDir, { recursive: true });
+    const prevFiles = argsList('--prev-file').map(p => path.resolve(p));
+    const extRe = platform.startsWith('win32') ? /-x64-Setup\.exe$/i : /-arm64\.dmg$/i;
+    const baseFiles = prevFiles.length > 0
+      ? prevFiles
+      : await autoScanPrev(outDir, n => n.startsWith('GrokBotLocal-') && extRe.test(n), destFile);
     if (path.resolve(filePath) !== destFile) await copyFile(filePath, destFile);
     const keyInfo = await loadManifestSigningKey(manifestKeyPath);
     const feedName = track === 'stable' ? `${platform}.json` : `${platform}-${track}.json`;
-    const signedManifest = signDesktopUpdateManifest({
+    const targetSha = sha256Hex(bytes);
+    const deltasDir = path.join(outDir, 'deltas');
+    const deltas = [];
+    for (const prevPath of baseFiles) {
+      const entry = await writeFileDelta({
+        prevPath,
+        targetBytes: bytes,
+        targetSha,
+        prefix: `${platform}-${version}`,
+        deltasDir,
+        baseUrl,
+      }).catch(() => null);
+      if (entry) deltas.push(entry);
+    }
+    const asarDeltas = [];
+    const targetAsarPath = arg('--asar') ? path.resolve(arg('--asar')) : '';
+    const prevAsars = argsList('--prev-asar').map(p => path.resolve(p));
+    if (targetAsarPath && prevAsars.length > 0) {
+      const targetAsarBytes = await readFile(targetAsarPath);
+      const targetAsarSha = await sha256File(targetAsarPath);
+      const targetAsarHeader = await readAsarHeaderInfo(targetAsarPath);
+      for (const prevAsarPath of prevAsars) {
+        const prevAsarBytes = await readFile(prevAsarPath);
+        const prevAsarSha = sha256Hex(prevAsarBytes);
+        if (prevAsarSha === targetAsarSha) continue;
+        const deltaBytes = createDeltaBuffer(prevAsarBytes, targetAsarBytes);
+        if (deltaBytes.length >= targetAsarBytes.length) continue;
+        const prevHeader = await readAsarHeaderInfo(prevAsarPath);
+        const deltaName = `${platform}-asar-${prevAsarSha.slice(0, 12)}-to-${targetAsarSha.slice(0, 12)}.gbdelta`;
+        await writeAtomic(path.join(deltasDir, deltaName), deltaBytes);
+        asarDeltas.push({
+          baseSha256: prevAsarSha,
+          baseSize: prevAsarBytes.length,
+          baseHeaderSha256: prevHeader.headerSha256,
+          targetSha256: targetAsarSha,
+          targetSize: targetAsarBytes.length,
+          targetHeaderSha256: targetAsarHeader.headerSha256,
+          sha256: sha256Hex(deltaBytes),
+          size: deltaBytes.length,
+          url: `${baseUrl}/deltas/${deltaName}`,
+        });
+      }
+    }
+    let signedManifest = signDesktopUpdateManifest({
       platform,
       track,
       version,
-      sha256: sha256Hex(bytes),
+      sha256: targetSha,
       size: bytes.length,
       url: `${baseUrl}/${filename}`,
       publishedAt: new Date().toISOString(),
     }, keyInfo.privateKey);
+    if (deltas.length > 0 || asarDeltas.length > 0) {
+      signedManifest = signDesktopDeltas({
+        ...signedManifest,
+        ...(deltas.length > 0 ? { deltas } : {}),
+        ...(asarDeltas.length > 0 ? { asarDeltas } : {}),
+      }, keyInfo.privateKey);
+      verifyDesktopDeltas(signedManifest, keyInfo.publicKeySpkiBase64);
+    }
     verifyDesktopUpdateManifest(signedManifest, keyInfo.publicKeySpkiBase64);
     await writeAtomic(path.join(outDir, feedName), JSON.stringify(signedManifest, null, 2) + '\n');
     console.log(JSON.stringify({ published: true, feed: feedName, file: destFile, manifest: signedManifest, publicKeySpkiBase64: keyInfo.publicKeySpkiBase64 }, null, 2));

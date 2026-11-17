@@ -13,7 +13,7 @@ The official Android app (`ai.x.grok.bot` 1.16.0) carries Google Play tamper pro
 - The interface is the official **desktop** interface, taken from your own download of the official Windows installer: 1.1.0 is recommended (the same installer as the Windows client), and 0.71.2 is the fallback if 1.1.0 does not work.
 - It runs inside an Android shell written for this project (`shell/`), which connects to the Host and handles credentials, notifications, files, the back gesture and other phone features.
 
-Android installs the **project's shell**, `dev.grokbot.local`: `versionName` **1.2.3**, `versionCode` **10203**. The recommended renderer is Windows **1.1.0**; **0.71.2** also works. A shell release does not add support for a newer renderer or change the installed app's identity.
+Android installs the **project's shell**, `dev.grokbot.local`: `versionName` **1.2.8**, `versionCode` **10208**. The recommended renderer is Windows **1.1.0**; **0.71.2** also works. A shell release does not add support for a newer renderer or change the installed app's identity.
 
 ## Usage
 
@@ -27,8 +27,8 @@ The tool downloads and verifies the official `Grok_Bot_1.1.0_Setup.exe` (the sam
 
 | Output | Purpose |
 | --- | --- |
-| `GrokBotLocal-1.2.3-android.apk` | Install it on the phone; the filename uses the shell version |
-| `GrokBotLocal-1.2.3-android.patch.json` | Build record: shell and renderer versions, input digests, APK digest and signing certificate fingerprint |
+| `GrokBotLocal-1.2.8-android.apk` | Install it on the phone; the filename uses the shell version |
+| `GrokBotLocal-1.2.8-android.patch.json` | Build record: shell and renderer versions, input digests, APK digest and signing certificate fingerprint |
 
 If the 1.1.0 interface does not work for you, add `--version 0.71.2` to use the 0.71.2 interface (it downloads `Grok_Bot_0.71.2_Setup.exe`), or pass a downloaded 0.71.2 installer with `--source`; the tool recognizes the version by its digest. Both interfaces produce the same APK filename, so add `--force` to replace the previous output or pick another folder with `--output`. The two APKs share the shell and signing key and install over each other without losing the pairing.
 

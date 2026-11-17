@@ -56,6 +56,7 @@ import { Connectors, connectorApiMethods, mobileConnectorMethods } from "./conne
 import { attachmentDataUrl } from "./attachments.mjs";
 import { DeviceConnections, proxyHttp, proxyWebSocket } from "./proxy.mjs";
 import { proxyLocalExec } from "./local-exec-proxy.mjs";
+import { handleUpdateProxy } from "./update-proxy.mjs";
 import { VncTickets, vncPath, normalizeVncUpgradeUrl } from "./vnc.mjs";
 import {
   adminMutation,
@@ -345,7 +346,7 @@ export async function createSelfHostServer(options = {}) {
       return response.end(wav);
     }
     if (await tailcatAdmin(request, response, path, network)) return;
-    if (await applicationsAdmin(request, response, path, applications, origin, { kind: 'admin', hash: hash(cookie(request, adminCookie)) })) return;
+    if (await applicationsAdmin(request, response, path, applications, webhookOrigin(request, origin), { kind: 'admin', hash: hash(cookie(request, adminCookie)) })) return;
     if (await adminExtensions(request, response, path, { harness, skills, executionNode, plugins, webhooks, verifyAgent, sharing, federation, mediaSettings, webSettings, webServices, prompts })) return;
     if (method === 'GET' && path === '/admin/api/speech')
       return sendJson(response, 200, speech.publicConfig());
@@ -357,7 +358,7 @@ export async function createSelfHostServer(options = {}) {
     }
     if (path === "/admin/api/connectors" || path.startsWith("/admin/api/connectors/"))
       return sendJson(response, 200, await connectors.route("admin", method, path,
-        method === "GET" ? {} : await jsonBody(request, 512 * 1024), origin,
+        method === "GET" ? {} : await jsonBody(request, 512 * 1024), webhookOrigin(request, origin),
         { kind: "admin", hash: hash(cookie(request, adminCookie)) }));
     if (method === "GET" && path === "/admin/api/profile")
       return sendJson(response, 200, profile.current());
@@ -609,7 +610,7 @@ export async function createSelfHostServer(options = {}) {
     if (path === "/local/connectors" || path.startsWith("/local/connectors/")) {
       const found = device(request);
       return sendJson(response, 200, await connectors.route("local", request.method, path,
-        request.method === "GET" ? {} : await jsonBody(request, 512 * 1024), origin,
+        request.method === "GET" ? {} : await jsonBody(request, 512 * 1024), webhookOrigin(request, origin),
         { kind: "device", id: found.id }));
     }
     if (path.startsWith('/local/app-intents/')) {
@@ -624,7 +625,7 @@ export async function createSelfHostServer(options = {}) {
       check(request.method === "POST" && mobileConnectorMethods.has(method), 404, "连接应用接口不存在");
       return sendJson(response, 200, await connectors.mobile(method,
         // The original client omits the body for parameterless RPC methods.
-        await jsonBody(request, 512 * 1024, { allowEmpty: true }), origin, { kind: "device", id: found.id }));
+        await jsonBody(request, 512 * 1024, { allowEmpty: true }), webhookOrigin(request, origin), { kind: "device", id: found.id }));
     }
     if (path.startsWith("/vnc/")) {
       check(["GET", "HEAD"].includes(request.method), 405, "不支持的请求方法");
@@ -655,6 +656,7 @@ export async function createSelfHostServer(options = {}) {
       const found = device(request);
       return sendJson(response, 200, request.method === "GET" ? push.get(found.id) : await push.register(found.id, await jsonBody(request)));
     }
+    if (await handleUpdateProxy(request, response, path, url, { device, connections })) return;
     if (request.method === "POST" && path === "/local/device/push/test") {
       const found = device(request);
       limiter.check(`local-push-test:${found.id}`, 10);
@@ -765,7 +767,7 @@ export async function createSelfHostServer(options = {}) {
       }
       if (connectorApiMethods.has(path.slice("/api/".length)))
         return sendJson(response, 200, await connectors.original(path.slice("/api/".length),
-          await jsonBody(request, 512 * 1024), origin, { kind: "device", id: found.id }));
+          await jsonBody(request, 512 * 1024), webhookOrigin(request, origin), { kind: "device", id: found.id }));
       if (path === "/api/deleteAgents")
         return deleteAgentsWithLibrary(request, response, {
           hostUrl,

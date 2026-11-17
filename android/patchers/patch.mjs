@@ -27,7 +27,7 @@ import { normalizeEcPublicKey } from './release-sign.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const androidRoot = path.resolve(here, '..');
 const repo = path.resolve(androidRoot, '..');
-const sharedAssets = ['i18n.mjs', 'external-url.mjs', 'connectors.mjs', 'dictation.mjs', 'workspace.css', 'workspace-keys.cjs'];
+const sharedAssets = ['i18n.mjs', 'external-url.mjs', 'connectors.mjs', 'dictation.mjs', 'sand-machines.mjs', 'workspace.css', 'workspace-keys.cjs'];
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 async function hashFile(filename) {
   const hash = createHash('sha256');

@@ -133,6 +133,7 @@ html.grokbot-phone {
   --grokbot-scrim: rgba(0, 0, 0, 0.28);
   --grokbot-back-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 5l-7 7 7 7'/%3E%3C/svg%3E");
   --grokbot-close-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M6 6l12 12M18 6L6 18'/%3E%3C/svg%3E");
+  --grokbot-chevron-down-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
   /* Bubbles of the original interface, in the official phone app's colours and sizes. */
   --sand-transcript-bubble-user-fill: var(--grokbot-bubble-user);
   --sand-transcript-bubble-user-text: #fff;
@@ -180,9 +181,9 @@ html.grokbot-phone #root > * {
   background: var(--grokbot-paper) !important;
 }
 
-/* Round floating buttons: back, the account, search, new Bot and add (to a message). */
-html.grokbot-phone :is(.grokbot-nav-back, .sand-agents-sidebar__new-actions .sand-kit-icon-button,
-  .sand-agents-sidebar__footer button[aria-haspopup="menu"], .sand-prompt-attach) {
+/* Round floating buttons: back, the account, search, and new Bot. */
+html.grokbot-phone :is(.grokbot-nav-back, .sand-agents-sidebar__new-actions .sand-kit-icon-button:not(.sand-agents-sidebar__search),
+  .sand-agents-sidebar__footer button[aria-haspopup="menu"], .sand-chat-header__controls .sand-kit-icon-button) {
   width: 44px !important;
   height: 44px !important;
   min-width: 44px !important;
@@ -193,8 +194,8 @@ html.grokbot-phone :is(.grokbot-nav-back, .sand-agents-sidebar__new-actions .san
   box-shadow: var(--grokbot-glass-shadow) !important;
   color: var(--grokbot-label) !important;
 }
-html.grokbot-phone :is(.grokbot-nav-back, .sand-agents-sidebar__new-actions .sand-kit-icon-button,
-  .sand-agents-sidebar__footer button[aria-haspopup="menu"], .sand-prompt-attach):active {
+html.grokbot-phone :is(.grokbot-nav-back, .sand-agents-sidebar__new-actions .sand-kit-icon-button:not(.sand-agents-sidebar__search),
+  .sand-agents-sidebar__footer button[aria-haspopup="menu"], .sand-chat-header__controls .sand-kit-icon-button):active {
   opacity: 0.7;
 }
 
@@ -222,11 +223,13 @@ html.grokbot-phone .sand-chat {
 html.grokbot-phone.grokbot-view-list .sand-chat {
   transform: translateX(100%);
   visibility: hidden;
+  pointer-events: none !important;
   transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s 260ms;
 }
 html.grokbot-phone.grokbot-view-chat .sand-agents-sidebar {
   transform: translateX(-30%);
   visibility: hidden;
+  pointer-events: none !important;
   transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s 260ms;
 }
 html.grokbot-phone .sand-sidebar-resize-handle,
@@ -234,12 +237,12 @@ html.grokbot-phone .sand-info-pane__resize-handle {
   display: none !important;
 }
 
-/* Bot list: the account on the left, search and new Bot on the right and no title; rows with
-   large avatars, the name above the latest message. */
+/* Bot list: top-left account, top-right + button, bottom-left Connect apps button, and bottom
+   full-width Search pill (matching official phone screenshots). */
 html.grokbot-phone .sand-agents-sidebar__header {
   height: 56px !important;
   min-height: 56px !important;
-  padding: 0 16px !important;
+  padding: 0 12px !important;
   border: 0 !important;
 }
 html.grokbot-phone .sand-agents-sidebar__new-actions {
@@ -249,21 +252,92 @@ html.grokbot-phone .sand-agents-sidebar__new-actions .sand-kit-icon {
   transform: scale(1.15);
 }
 html.grokbot-phone .sand-agents-sidebar__footer {
-  position: absolute !important;
-  z-index: 2;
-  top: 6px;
-  left: 16px;
+  position: static !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-height: 0 !important;
   padding: 0 !important;
   border: 0 !important;
+  overflow: visible !important;
   background: none !important;
 }
 html.grokbot-phone .sand-agents-sidebar__footer > * {
   width: auto !important;
   padding: 0 !important;
 }
-/* The marketplace moves into the account menu (layout.js), as in the official app. */
-html.grokbot-phone .sand-agents-sidebar__footer button:not([aria-haspopup="menu"]) {
+html.grokbot-phone .sand-agents-sidebar__footer button[aria-haspopup="menu"] {
+  position: fixed !important;
+  z-index: 4 !important;
+  top: 6px !important;
+  left: 12px !important;
+}
+html.grokbot-phone .sand-agents-sidebar__footer button:not([aria-haspopup="menu"]):not(#\#):not(#\#):not(#\#):not(#\#) {
+  position: fixed !important;
+  z-index: 4 !important;
+  left: 12px !important;
+  bottom: 12px !important;
+  width: 44px !important;
+  min-width: 44px !important;
+  max-width: 44px !important;
+  height: 44px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 22px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background: var(--grokbot-glass) !important;
+  box-shadow: var(--grokbot-glass-shadow) !important;
+  color: var(--grokbot-label) !important;
+}
+html.grokbot-phone .sand-agents-sidebar__footer button:not([aria-haspopup="menu"]) > :first-child:not(#\#):not(#\#):not(#\#):not(#\#) {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 22px !important;
+  max-width: 22px !important;
+  height: 22px !important;
+  opacity: 1 !important;
+  overflow: visible !important;
+  margin: 0 !important;
+}
+html.grokbot-phone .sand-agents-sidebar__footer button:not([aria-haspopup="menu"]) > :nth-child(n+2) {
   display: none !important;
+}
+html.grokbot-phone button.sand-agents-sidebar__search:not(#\#):not(#\#):not(#\#):not(#\#) {
+  position: fixed !important;
+  z-index: 4 !important;
+  left: 64px !important;
+  right: 12px !important;
+  bottom: 12px !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: 44px !important;
+  padding: 0 16px !important;
+  gap: 8px !important;
+  border: 0 !important;
+  border-radius: 22px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  background: var(--grokbot-glass) !important;
+  box-shadow: var(--grokbot-glass-shadow) !important;
+  color: var(--grokbot-label-2) !important;
+}
+html.grokbot-phone button.sand-agents-sidebar__search:not(#\#):not(#\#):not(#\#):not(#\#) .sand-kit-icon {
+  transform: scale(1.05);
+  flex: none !important;
+  color: var(--grokbot-label) !important;
+}
+html.grokbot-phone button.sand-agents-sidebar__search:not(#\#):not(#\#):not(#\#):not(#\#)::after {
+  content: attr(aria-label);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 16px;
+  font-weight: 400;
+  color: var(--grokbot-label-2);
 }
 html.grokbot-phone .sand-agents-sidebar__footer button[aria-haspopup="menu"] .sand-kit-base-avatar {
   width: 44px !important;
@@ -275,11 +349,67 @@ html.grokbot-phone .sand-agents-sidebar__footer button[aria-haspopup="menu"] .sa
   height: 100% !important;
 }
 html.grokbot-phone .sand-agents-list__rows {
-  padding: 4px 12px 24px !important;
+  padding: 4px 12px 76px !important;
+}
+html.grokbot-phone button.sand-agents-more-unreads:not(#\#):not(#\#):not(#\#):not(#\#) {
+  position: absolute !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+  z-index: 5 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  height: 38px !important;
+  min-height: 38px !important;
+  padding: 0 14px 0 16px !important;
+  gap: 6px !important;
+  border-radius: 9999px !important;
+  background-color: #1677ff !important;
+  color: #fff !important;
+  font-size: 15px !important;
+  line-height: 20px !important;
+  font-weight: 500 !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16) !important;
+}
+html.grokbot-phone button.sand-agents-more-unreads:not([data-direction="above"]):not(#\#):not(#\#):not(#\#):not(#\#) {
+  top: auto !important;
+  bottom: 68px !important;
+}
+html.grokbot-phone button.sand-agents-more-unreads[data-direction="above"]:not(#\#):not(#\#):not(#\#):not(#\#) {
+  top: 10px !important;
+  bottom: auto !important;
+}
+html.grokbot-phone button.sand-agents-more-unreads[data-grokbot-label]::before {
+  content: attr(data-grokbot-label);
+  white-space: nowrap;
+}
+html.grokbot-phone button.sand-agents-more-unreads[data-grokbot-label] > :nth-child(2) {
+  display: none !important;
+}
+html.grokbot-phone button.sand-agents-more-unreads > :first-child {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 16px !important;
+  height: 16px !important;
+  flex: none !important;
+}
+html.grokbot-phone button.sand-agents-more-unreads > :first-child > * {
+  display: none !important;
+}
+html.grokbot-phone button.sand-agents-more-unreads > :first-child::after {
+  content: "";
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  -webkit-mask: var(--grokbot-chevron-down-icon) center / 16px no-repeat;
+  mask: var(--grokbot-chevron-down-icon) center / 16px no-repeat;
+}
+html.grokbot-phone button.sand-agents-more-unreads[data-direction="above"] > :first-child::after {
+  transform: rotate(180deg);
 }
 html.grokbot-phone .sand-agent-item {
   min-height: 0 !important;
-  padding: 16px 10px 16px 8px !important;
+  padding: 14px 8px !important;
   gap: 14px !important;
   border-radius: 10px !important;
 }
@@ -359,12 +489,17 @@ html.grokbot-phone .sand-toolbar :is(button, [role="button"], a) {
 }
 html.grokbot-phone .sand-toolbar > div {
   height: 56px !important;
-  padding: 0 16px 0 68px !important;
+  padding: 0 12px 0 64px !important;
   border: 0 !important;
 }
-html.grokbot-phone .sand-chat-header {
+html.grokbot-phone .sand-chat-header:not(#\#):not(#\#):not(#\#):not(#\#) {
+  width: 100% !important;
   height: 56px !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
   grid-template-columns: minmax(0, 1fr) auto !important;
+  justify-content: stretch !important;
+  gap: 8px !important;
 }
 html.grokbot-phone .sand-chat-header__identity-row {
   grid-column: 1 !important;
@@ -373,11 +508,13 @@ html.grokbot-phone .sand-chat-header__identity-row {
 }
 html.grokbot-phone .sand-chat-header__controls {
   grid-column: 2 !important;
+  gap: 8px !important;
 }
 html.grokbot-phone .sand-chat-header__identity {
   height: 44px !important;
+  max-width: calc(100vw - 128px) !important;
   gap: 8px !important;
-  padding: 0 16px 0 6px !important;
+  padding: 0 14px 0 6px !important;
   border: 0 !important;
   border-radius: 22px !important;
   background: var(--grokbot-glass) !important;
@@ -410,7 +547,7 @@ html.grokbot-phone .grokbot-nav-back {
   position: absolute;
   z-index: 4;
   top: 6px;
-  left: 16px;
+  left: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -419,6 +556,9 @@ html.grokbot-phone .sand-virtual-transcript {
   overflow-x: clip !important;
   overscroll-behavior-x: contain;
   max-width: 100% !important;
+}
+html.grokbot-phone .sand-virtual-transcript:not(#\#):not(#\#):not(#\#):not(#\#) {
+  padding-inline: 12px !important;
 }
 html.grokbot-phone .sand-virtual-transcript__inner,
 html.grokbot-phone .sand-transcript-row,
@@ -429,11 +569,14 @@ html.grokbot-phone .sand-message {
   max-width: 100% !important;
   box-sizing: border-box !important;
 }
-html.grokbot-phone .sand-message-action-anchor[data-role] {
-  max-width: calc(100% - 44px) !important;
+html.grokbot-phone .sand-message-action-anchor[data-role]:not(#\#):not(#\#):not(#\#):not(#\#) {
+  max-width: calc(100% - 28px) !important;
   min-width: 0 !important;
-  padding-inline: 14px !important;
   overflow: hidden !important;
+}
+html.grokbot-phone .sand-message-action-anchor[data-role] .sand-message:not(#\#):not(#\#):not(#\#):not(#\#) {
+  max-width: 100% !important;
+  padding: 10px 14px !important;
 }
 html.grokbot-phone .sand-message-prose {
   font-size: 17px !important;
@@ -441,6 +584,9 @@ html.grokbot-phone .sand-message-prose {
   min-width: 0 !important;
   max-width: 100% !important;
   overflow-wrap: anywhere;
+}
+html.grokbot-phone .sand-message-prose :is(p, li, ul, ol, blockquote, h1, h2, h3, h4, h5, h6, div):not(#\#):not(#\#):not(#\#):not(#\#) {
+  max-width: 100% !important;
 }
 html.grokbot-phone .sand-message-prose :is(p, li, code, a) {
   overflow-wrap: anywhere;
@@ -461,9 +607,6 @@ html.grokbot-phone .sand-transcript-time-separator {
   line-height: 16px !important;
   color: var(--grokbot-label-2) !important;
 }
-html.grokbot-phone .sand-prompt-form {
-  padding-left: 52px !important;
-}
 html.grokbot-phone .sand-prompt-shell {
   min-height: 44px;
   overflow: visible !important;
@@ -472,12 +615,16 @@ html.grokbot-phone .sand-prompt-shell {
   background: var(--grokbot-glass) !important;
   box-shadow: var(--grokbot-glass-shadow) !important;
 }
-html.grokbot-phone .sand-prompt-pad {
-  padding-left: 18px !important;
-  padding-right: 82px !important;
+html.grokbot-phone .sand-prompt-shell:is(:not([data-expanded]), [data-expanded="false"]) .sand-prompt-pad {
+  padding-left: 48px !important;
+  padding-right: 88px !important;
 }
-html.grokbot-phone .sand-prompt-shell:has(.sand-prompt-field > p.is-editor-empty:only-child) .sand-prompt-pad {
-  padding-right: 46px !important;
+html.grokbot-phone .sand-prompt-shell:is(:not([data-expanded]), [data-expanded="false"]):not(:has(.sand-prompt-mic:not([inert]))):not(:has(.sand-prompt-voice-chip)) .sand-prompt-pad,
+html.grokbot-phone .sand-prompt-shell:is(:not([data-expanded]), [data-expanded="false"]):has(.sand-prompt-ghost-mic-seat.sand-nalus7):not(:has(.sand-prompt-voice-chip)) .sand-prompt-pad {
+  padding-right: 48px !important;
+}
+html.grokbot-phone .sand-prompt-shell[data-expanded]:not([data-expanded="false"]) .sand-prompt-pad {
+  padding: 10px 16px 46px 16px !important;
 }
 html.grokbot-phone .sand-prompt-form textarea,
 html.grokbot-phone .sand-prompt-form [contenteditable="true"] {
@@ -487,31 +634,56 @@ html.grokbot-phone .sand-prompt-form [contenteditable="true"] {
 html.grokbot-phone .sand-prompt-field p.is-editor-empty::before {
   color: var(--grokbot-label-3) !important;
 }
-/* The add button sits outside the field, at its bottom left. */
-html.grokbot-phone .sand-prompt-actions-row > :first-child {
-  position: absolute !important;
-  left: -60px;
-  bottom: 0;
-  width: 44px !important;
-  height: 44px !important;
+html.grokbot-phone .sand-prompt-shell[data-expanded]:not([data-expanded="false"]) .sand-prompt-actions-row {
+  height: 32px !important;
+  bottom: 8px !important;
 }
 html.grokbot-phone .sand-prompt-actions-trailing {
   margin-left: auto !important;
+  display: inline-flex !important;
+  align-items: center !important;
 }
-html.grokbot-phone .sand-prompt-attach .ui-icon {
-  transform: scale(1.3);
-  color: var(--grokbot-label) !important;
+html.grokbot-phone .sand-prompt-ghost-mic-seat {
+  height: 32px !important;
+  display: inline-flex !important;
+  align-items: center !important;
 }
-html.grokbot-phone :is(.sand-prompt-send, .sand-prompt-mic) {
+html.grokbot-phone .sand-prompt-ghost-mic-seat:not(.sand-nalus7):not(:has(.sand-prompt-mic[inert])) {
+  width: 32px !important;
+  margin-inline-end: 6px !important;
+  overflow: visible !important;
+}
+html.grokbot-phone :is(.sand-prompt-attach, .sand-prompt-send, .sand-prompt-mic, .sand-prompt-voice-send, .sand-prompt-voice-chip button) {
   width: 32px !important;
   height: 32px !important;
   min-width: 32px !important;
+  border-radius: 16px !important;
+}
+html.grokbot-phone .sand-prompt-attach {
+  border: 0 !important;
+  padding: 0 !important;
+  background: var(--grokbot-fill-3) !important;
+  box-shadow: none !important;
+  color: var(--grokbot-label) !important;
+}
+html.grokbot-phone .sand-prompt-attach:active {
+  opacity: 0.7;
+}
+html.grokbot-phone .sand-prompt-attach .ui-icon {
+  transform: scale(1.15);
+  color: var(--grokbot-label) !important;
+}
+html.grokbot-phone .sand-prompt-mic {
+  border: 0 !important;
+  background: var(--grokbot-fill-3) !important;
+  box-shadow: none !important;
+  color: var(--grokbot-label) !important;
 }
 /* With nothing typed the round button records a voice message: grey, as in the official app. */
-html.grokbot-phone .sand-prompt-shell:has(.sand-prompt-field > p.is-editor-empty:only-child) .sand-prompt-send {
+html.grokbot-phone .sand-prompt-shell:has(.sand-prompt-field > p.is-editor-empty:only-child) .sand-prompt-send[type="button"] {
   background: var(--grokbot-fill-3) !important;
 }
-html.grokbot-phone .sand-prompt-shell:has(.sand-prompt-field > p.is-editor-empty:only-child) .sand-prompt-send .ui-icon {
+html.grokbot-phone .sand-prompt-shell:has(.sand-prompt-field > p.is-editor-empty:only-child) .sand-prompt-send[type="button"] .ui-icon {
   color: var(--grokbot-label) !important;
 }
 
@@ -705,30 +877,65 @@ html.grokbot-phone .sand-settings-panel__body {
 html.grokbot-phone .sand-settings-panel__body .sand-settings-pane {
   padding: 8px 0 28px !important;
 }
-/* Connected apps: a round back button at the top left, the page on the paper colour. */
+/* Connected apps: a round back button at the top left, full-height scrollable catalog below. */
+html.grokbot-phone .sand-plugins-layout {
+  position: relative !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  flex: 1 1 auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+  background: var(--grokbot-paper) !important;
+}
+html.grokbot-phone .sand-plugins-layout > div {
+  height: 100% !important;
+  min-height: 0 !important;
+  flex: 1 1 auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+html.grokbot-phone .sand-plugins-layout > div:not(:has(.sand-plugins)):not(:has(button, input, a, p, h1, h2, h3, [role])) {
+  display: none !important;
+}
+html.grokbot-phone .sand-plugins-layout .sand-plugins {
+  height: 100% !important;
+  min-height: 0 !important;
+  flex: 1 1 auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+  background: var(--grokbot-paper) !important;
+}
+html.grokbot-phone .sand-plugins > :first-child {
+  height: auto !important;
+  min-height: 56px !important;
+  flex: none !important;
+  padding-top: 6px !important;
+  padding-bottom: 6px !important;
+}
 html.grokbot-phone .sand-plugins > :first-child > * > * {
-  padding-left: 20px !important;
-  padding-right: 20px !important;
+  padding-left: 68px !important;
+  padding-right: 12px !important;
+}
+html.grokbot-phone .sand-plugins > :nth-child(2) {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  height: auto !important;
 }
 html.grokbot-phone .sand-plugins .sand-settings-pane {
-  padding-left: 20px !important;
-  padding-right: 20px !important;
+  padding-left: 14px !important;
+  padding-right: 14px !important;
 }
 html.grokbot-phone .sand-plugins-layout > div > div {
   background: transparent !important;
-}
-html.grokbot-phone .sand-plugins-layout > div > div:first-child {
-  height: 56px !important;
-  min-height: 56px !important;
-  flex: none !important;
 }
 html.grokbot-phone .sand-plugins-layout > div > div > div {
   background: transparent !important;
 }
 html.grokbot-phone .sand-plugins-layout > .sand-kit-icon-button {
   top: 6px !important;
-  left: 16px !important;
+  left: 12px !important;
   right: auto !important;
+  z-index: 6 !important;
   width: 44px !important;
   height: 44px !important;
   border-radius: 22px !important;
@@ -935,9 +1142,22 @@ html.grokbot-phone .sand-create-bot-dialog[data-component="base-dialog-popup"] >
   color: var(--grokbot-label) !important;
 }
 
-/* Menus (account, Bot actions, choices) are sheets from the bottom as well. */
+/* Menus (account, Bot actions, choices) and dialogs: keep popups above backdrops and closed shields inert. */
+html.grokbot-phone [data-base-ui-portal]:has([data-closed]) > :is([data-component="menu-backdrop"], [data-component="base-dialog-backdrop"], [data-component="base-alert-dialog-backdrop"], [inert]),
+html.grokbot-phone :is([data-component="menu-backdrop"], [data-component="base-dialog-backdrop"], [data-component="base-alert-dialog-backdrop"], .ui-menu__backdrop)[data-closed],
+html.grokbot-phone :is([data-component="menu-positioner"], [data-component="select-positioner"])[data-closed] {
+  pointer-events: none !important;
+  display: none !important;
+}
+html.grokbot-phone :is([data-component="base-dialog-backdrop"], [data-component="base-alert-dialog-backdrop"], .ui-dialog__backdrop):not(#\#):not(#\#):not(#\#):not(#\#) {
+  z-index: 10010 !important;
+}
+html.grokbot-phone :is([data-component="base-dialog-viewport"], [data-component="base-alert-dialog-viewport"]):not(#\#):not(#\#):not(#\#):not(#\#) {
+  z-index: 10020 !important;
+}
 html.grokbot-phone .ui-menu:not(.ui-menu--virtualized) {
   position: fixed !important;
+  z-index: 10035 !important;
   top: auto !important;
   bottom: 8px !important;
   left: 8px !important;
@@ -951,7 +1171,8 @@ html.grokbot-phone .ui-menu:not(.ui-menu--virtualized) {
 }
 /* Context menus and choice lists of the base components (the Bot actions on a long press,
    the theme in settings). */
-html.grokbot-phone :is([data-component="menu-positioner"], [data-component="select-positioner"]) {
+html.grokbot-phone :is([data-component="menu-positioner"], [data-component="select-positioner"]):not(#\#):not(#\#):not(#\#):not(#\#) {
+  z-index: 10035 !important;
   top: auto !important;
   bottom: 8px !important;
   left: 8px !important;
@@ -971,6 +1192,9 @@ html.grokbot-phone :is([data-component="menu-popup"], [data-component="select-po
   padding: 6px !important;
   animation: grokbot-sheet-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+html.grokbot-phone :is(.ui-dialog, [data-component="base-dialog-popup"], [data-component="base-alert-dialog-popup"], [role="dialog"], [role="alertdialog"]):not(#\#):not(#\#):not(#\#):not(#\#) {
+  z-index: 10025 !important;
+}
 html.grokbot-phone :is([data-component="menu-popup"] [role^="menuitem"], [data-component="select-popup"] [role="option"]) {
   min-height: 48px !important;
   font-size: 16px !important;
@@ -981,7 +1205,8 @@ html.grokbot-phone [data-component="menu-popup"] .ui-icon {
 html.grokbot-phone .ui-menu .ui-icon {
   transform: scale(1.25);
 }
-html.grokbot-phone .ui-menu__backdrop {
+html.grokbot-phone :is(.ui-menu__backdrop, [data-component="menu-backdrop"]):not(#\#):not(#\#):not(#\#):not(#\#) {
+  z-index: 10029 !important;
   background: var(--grokbot-scrim) !important;
 }
 html.grokbot-phone .ui-menu__row,
@@ -996,4 +1221,190 @@ html.grokbot-phone .ui-menu__toggle-row {
 @keyframes grokbot-sheet-in {
   from { translate: 0 24px; opacity: 0; }
   to { translate: 0 0; opacity: 1; }
+}
+
+/* Official phone Bot details hub: hides upstream Overview/Settings body while active so only
+   the hub cards appear; clicking a row switches to Overview/Settings/Library with back to hub. */
+html.grokbot-phone.grokbot-bot-profile-open .sand-info-pane[data-open="true"] > .sand-info-pane__inner > :not(.grokbot-bot-profile),
+html.grokbot-phone.grokbot-bot-profile-open .sand-info-pane[data-open="true"] ~ div:has(> * > .sand-box-vnc-pool) {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+html.grokbot-phone.grokbot-subpage-routines .sand-info-pane__section-content :is(.sand-computer-preview, .sand-agent-settings) {
+  display: none !important;
+}
+html.grokbot-phone.grokbot-subpage-computer .sand-info-pane__section-content :is(.sand-computer-preview ~ *, .sand-agent-settings) {
+  display: none !important;
+}
+html.grokbot-phone .grokbot-bot-profile {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background: var(--grokbot-chrome);
+  padding: 0 14px 28px;
+}
+html.grokbot-phone .grokbot-bot-profile[hidden] {
+  display: none !important;
+}
+html.grokbot-phone .grokbot-bot-profile__topbar {
+  height: 56px;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+html.grokbot-phone .grokbot-bot-profile__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+html.grokbot-phone .grokbot-bot-profile__icon-btn {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  border: 0;
+  border-radius: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--grokbot-glass);
+  box-shadow: var(--grokbot-glass-shadow);
+  color: var(--grokbot-label);
+}
+html.grokbot-phone .grokbot-bot-profile__icon-btn:active {
+  opacity: 0.7;
+}
+html.grokbot-phone .grokbot-bot-profile__hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 16px 24px;
+  gap: 12px;
+}
+html.grokbot-phone .grokbot-bot-profile__avatar {
+  width: 88px;
+  height: 88px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+html.grokbot-phone .grokbot-bot-profile__avatar > *,
+html.grokbot-phone .grokbot-bot-profile__avatar .sand-kit-base-avatar,
+html.grokbot-phone .grokbot-bot-profile__avatar img {
+  width: 88px !important;
+  height: 88px !important;
+}
+html.grokbot-phone .grokbot-bot-profile__name {
+  margin: 0;
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 600;
+  color: var(--grokbot-label);
+  text-align: center;
+}
+html.grokbot-phone .grokbot-bot-profile__edit {
+  height: 36px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 18px;
+  background: var(--grokbot-fill-3);
+  color: var(--grokbot-label);
+  font-size: 15px;
+  font-weight: 500;
+}
+html.grokbot-phone .grokbot-bot-profile__edit:active {
+  opacity: 0.7;
+}
+html.grokbot-phone .grokbot-bot-profile__card {
+  border-radius: 20px;
+  background: var(--grokbot-glass);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03), 0 0 0 0.5px var(--grokbot-glass-stroke);
+  overflow: hidden;
+  margin-bottom: 14px;
+}
+html.grokbot-phone .grokbot-bot-profile__row {
+  width: 100%;
+  min-height: 54px;
+  padding: 12px 16px;
+  border: 0;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--grokbot-label);
+  font-size: 16px;
+  text-align: left;
+  position: relative;
+}
+html.grokbot-phone .grokbot-bot-profile__row:active {
+  background: var(--grokbot-fill-3);
+}
+html.grokbot-phone .grokbot-bot-profile__row + .grokbot-bot-profile__row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50px;
+  right: 16px;
+  height: 0.5px;
+  background: var(--grokbot-glass-stroke);
+}
+html.grokbot-phone .grokbot-bot-profile__row-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+html.grokbot-phone .grokbot-bot-profile__row-icon {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--grokbot-label-2);
+  flex: none;
+}
+html.grokbot-phone .grokbot-bot-profile__row-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--grokbot-label-2);
+  font-size: 15px;
+  flex: none;
+}
+html.grokbot-phone .grokbot-bot-profile__switch {
+  position: relative;
+  width: 50px;
+  height: 30px;
+  border: 0;
+  border-radius: 15px;
+  padding: 2px;
+  background: var(--grokbot-fill);
+  transition: background-color 180ms ease;
+  flex: none;
+}
+html.grokbot-phone .grokbot-bot-profile__switch[aria-checked="true"] {
+  background: #6c4ce6;
+}
+html.grokbot-phone .grokbot-bot-profile__switch-thumb {
+  display: block;
+  width: 26px;
+  height: 26px;
+  border-radius: 13px;
+  background: #fff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: transform 180ms ease;
+}
+html.grokbot-phone .grokbot-bot-profile__switch[aria-checked="true"] .grokbot-bot-profile__switch-thumb {
+  transform: translateX(20px);
+}
+html.grokbot-phone .grokbot-bot-profile__caption {
+  padding: 0 16px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--grokbot-label-2);
 }

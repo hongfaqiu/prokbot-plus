@@ -546,11 +546,19 @@ func runInstallWizard(self, initialDir, version string, shell shellIntegration, 
 	}
 	w.hwnd = hwnd
 
+	existingUpgrade := false
+	if old, _, inspectErr := inspectDirectory(initialDir, true); inspectErr == nil && old != nil {
+		existingUpgrade = true
+	}
 	pad := scale(20)
 	contentW := winW - scale(16) - pad*2
 	createControl(0, "STATIC", fmt.Sprintf(text("欢迎安装 %s %s", "Welcome to %s %s Setup"), appName, version),
 		wsChild|wsVisible|ssLeft|ssNoPrefix, pad, scale(16), contentW, scale(24), hwnd, 0, hInstance, fontTitle)
-	createControl(0, "STATIC", text("选择安装位置（已有的配对和设置会自动保留）：", "Choose installation folder (existing pairing and settings are kept):"),
+	promptText := text("选择安装位置（已有的配对和设置会自动保留）：", "Choose installation folder (existing pairing and settings are kept):")
+	if existingUpgrade {
+		promptText = text("检测到已有安装，将直接覆盖升级（配对、设置与运行中程序将自动处理）：", "Existing installation found — will upgrade in place (keeps pairing and settings):")
+	}
+	createControl(0, "STATIC", promptText,
 		wsChild|wsVisible|ssLeft|ssNoPrefix, pad, scale(44), contentW, scale(20), hwnd, 0, hInstance, fontRegular)
 
 	browseW := scale(84)
@@ -565,7 +573,7 @@ func runInstallWizard(self, initialDir, version string, shell shellIntegration, 
 
 	chk := createControl(0, "BUTTON", text("创建桌面快捷方式", "Create desktop shortcut"),
 		wsChild|wsVisible|wsTabStop|bsAutoCheckBox, pad, scale(108), contentW, scale(22), hwnd, idDesktopChk, hInstance, fontRegular)
-	if chk != 0 {
+	if chk != 0 && !existingUpgrade {
 		sendMessageW.Call(chk, bmSetCheck, bstChecked, 0)
 	}
 

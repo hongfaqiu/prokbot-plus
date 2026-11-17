@@ -141,18 +141,44 @@ func inUse(directory string) bool {
 	return false
 }
 
-// waitUntilClosed asks the user to quit a running client; silent runs fail instead of waiting.
+// closeRunningProcesses terminates Grok Bot executables inside directory so upgrades can overwrite files cleanly.
+func closeRunningProcesses(directory string) {
+	dir := strings.TrimRight(filepath.Clean(directory), `\`) + `\`
+	script := `$ErrorActionPreference = 'SilentlyContinue'
+$dir = $env:GB_INSTALL_DIR
+Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force
+Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`
+	command := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+	command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	command.Env = append(os.Environ(), "GB_INSTALL_DIR="+dir)
+	_ = command.Run()
+}
+
+// waitUntilClosed automatically stops a running client in directory, falling back to a prompt if locked.
 func waitUntilClosed(directory string) (bool, error) {
-	// A relaunched uninstaller starts while its parent is still exiting from the same folder.
-	for attempt := 0; attempt < 30 && inUse(directory); attempt++ {
-		time.Sleep(500 * time.Millisecond)
+	// A relaunched uninstaller or in-app updater may still be exiting from the same folder.
+	for attempt := 0; attempt < 4 && inUse(directory); attempt++ {
+		time.Sleep(350 * time.Millisecond)
+	}
+	if inUse(directory) {
+		closeRunningProcesses(directory)
+		for attempt := 0; attempt < 24 && inUse(directory); attempt++ {
+			time.Sleep(250 * time.Millisecond)
+		}
 	}
 	for inUse(directory) {
+		closeRunningProcesses(directory)
+		for attempt := 0; attempt < 8 && inUse(directory); attempt++ {
+			time.Sleep(250 * time.Millisecond)
+		}
+		if !inUse(directory) {
+			break
+		}
 		if silent {
 			return false, errInUse
 		}
-		if !ask(text("Grok Bot Local 正在运行。请在通知区域图标菜单中选择“退出”，然后点“是”继续。",
-			"Grok Bot Local is running. Choose Quit from its notification-area icon, then select Yes to continue."), mbIconWarning) {
+		if !ask(text("无法自动关闭运行中的 Grok Bot Local。请在通知区域图标菜单中选择“退出”，然后点“是”继续。",
+			"Could not automatically close the running Grok Bot Local. Choose Quit from its notification-area icon, then select Yes to continue."), mbIconWarning) {
 			return false, nil
 		}
 	}
@@ -512,8 +538,9 @@ func main() {
 		tell(err.Error(), mbIconError)
 		os.Exit(1)
 	}
+	var relaunch bool
 	directory, mode, version := defaultDirectory(), "install", "0.71.2"
-	worker, migrate := false, false
+	worker, migrate, customDir := false, false, false
 	if strings.EqualFold(filepath.Base(self), uninstaller) {
 		mode, directory = "uninstall", filepath.Dir(self)
 	}
@@ -522,11 +549,14 @@ func main() {
 		switch {
 		case strings.EqualFold(argument, "/S"):
 			silent = true
+		case strings.EqualFold(argument, "/LAUNCH"), argument == "--launch":
+			relaunch = true
 		case argument == "--migrate-legacy":
 			migrate = true
 		case strings.HasPrefix(strings.ToUpper(argument), "/D="):
 			// As with NSIS, /D= comes last and may contain unquoted spaces.
 			directory = strings.Join(append([]string{argument[3:]}, os.Args[index+1:]...), " ")
+			customDir = true
 			index = len(os.Args)
 		case argument == "--uninstall":
 			mode, directory = "uninstall", installedDirectory(self)
@@ -536,6 +566,11 @@ func main() {
 			index++
 		case strings.HasPrefix(argument, "--version="):
 			version = strings.TrimPrefix(argument, "--version=")
+		}
+	}
+	if mode == "install" && !customDir {
+		if saved := strings.TrimRight(filepath.FromSlash(registryString(strings.TrimPrefix(registryKey, `HKCU\`), "InstallLocation")), `\`); saved != "" && checkLocation(saved) == nil {
+			directory = saved
 		}
 	}
 	directory = strings.TrimRight(filepath.FromSlash(directory), `\`)
@@ -554,6 +589,12 @@ func main() {
 			err = runInstallWizard(self, filepath.Clean(directory), version, windowsShell, false)
 		} else {
 			err = installEntry(self, filepath.Clean(directory), version, windowsShell, migrate)
+			if err == nil && relaunch {
+				targetExe := filepath.Join(filepath.Clean(directory), exeName)
+				cmd := exec.Command(targetExe)
+				cmd.Dir = filepath.Clean(directory)
+				_ = cmd.Start()
+			}
 		}
 	} else if migrate {
 		err = errors.New("--migrate-legacy requires an installer, not an uninstaller")

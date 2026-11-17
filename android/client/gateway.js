@@ -210,7 +210,20 @@ export function createGateway({ onUnauthorized, onConnected, onStateChanged, str
     // The Host keeps no read receipts for transcripts and has no pending lessons to offer.
     if (method === 'noteTranscriptOpened') return null;
     if (method === 'takeTeachLearningPrompts') return [];
-    const value = await request(`/api/${encodeURIComponent(method)}`, args, signal);
+    const transientRetry = async () => {
+      try {
+        return await request(`/api/${encodeURIComponent(method)}`, args, signal);
+      } catch (error) {
+        if (method === 'getForeverBoxStatus' && error?.httpStatus == null && !signal?.aborted && !lifetime.signal.aborted) {
+          await wait(250, signal ? combineSignals([signal, lifetime.signal]).signal : lifetime.signal).catch(() => {});
+          if (!signal?.aborted && !lifetime.signal.aborted) {
+            return await request(`/api/${encodeURIComponent(method)}`, args, signal);
+          }
+        }
+        throw error;
+      }
+    };
+    const value = await transientRetry();
     if (DESKTOP_METHODS.has(method)) noteDesktops(value, args?.id);
     return value;
   }

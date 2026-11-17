@@ -4,6 +4,7 @@ import { externalHttpUrl } from './external-url.mjs';
 import { createLinkPreview } from './link-preview.mjs';
 import { createClientPersistence } from './client-persistence.mjs';
 import { createDictation } from './dictation.mjs';
+import { fetchSandMachines } from './sand-machines.mjs';
 export const auth = {
   kind: "logged-in",
   authId: "grokbot-local-workspace",
@@ -216,7 +217,7 @@ export async function createLocalServices(profile, window, { command, request, a
     listMessagesAllowedRecipients: () => [],
     listComputerUseAllowedApps: () => [],
     attachProdBoxStatus: () => ({ enabled: false }),
-    getSandMachines: () => ({ machines: [], currentMachineRemoved: false }),
+    getSandMachines: () => fetchSandMachines({ request, signal: AbortSignal.timeout(10000) }),
     getFinanceOverview: () => ({ connections: [] }),
     forceReconnectGateway: async () => { await command("listAgents"); return { connected: true }; },
     openExternal: async ({ url }) => {

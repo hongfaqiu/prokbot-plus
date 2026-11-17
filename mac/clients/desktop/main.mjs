@@ -1,4 +1,5 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, MessageChannelMain, Menu, nativeImage, nativeTheme, Notification, safeStorage, screen, session, shell, Tray } from 'electron';
+import { spawn } from 'node:child_process';
 import { readFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,7 +21,8 @@ import { mintVoiceCredential, createVoiceAvailability } from './voice.mjs';
 import { externalHttpUrl } from './external-url.mjs';
 import { installExternalLinks } from './external-links.mjs';
 import { auth, boot, theme, language, experiments, createLocalServices, desktopEdges, probeLocalMethod } from './local-services.mjs';
-import { createDesktopUpdater, loadDesktopUpdateConfig } from './updater.mjs';
+import { createDesktopUpdater, createTailcatUpdateFetch, loadDesktopUpdateConfig } from './updater.mjs';
+import { applyAsarUpdateAndRestart, canApplyAsarUpdate } from './asar-install.mjs';
 
 const clientRoot = path.dirname(fileURLToPath(import.meta.url));
 const payload = path.join(clientRoot, '../dist');
@@ -169,7 +171,7 @@ async function showWorkspace() {
   void voiceAvailability.refresh();
   accountProfile = createProfile({ request: gateway.request, window: win, auth, server: activeConfig.server, onChange: reportConnection });
   await accountProfile.refresh().catch(() => {});
-  localExec = await createLocalExec({ payload, profile, config: activeConfig, command: gateway.command, window: win });
+  localExec = await createLocalExec({ payload, profile, config: activeConfig, command: gateway.command, request: gateway.request, window: win });
   browserProviders = await createBrowserProviders({ payload, profile, config: activeConfig, window: win,
     BrowserWindow, locale: () => language.resolved });
   win.on('focus', reportFocus); win.on('blur', reportFocus);
@@ -192,9 +194,23 @@ async function showWorkspace() {
   const updater = createDesktopUpdater({
     appVersion: app.getVersion(),
     profileDir: profile,
+    resourcesDir: process.resourcesPath,
+    execPath: process.execPath,
     config: await loadDesktopUpdateConfig({ resourcesDir: process.resourcesPath, profileDir: profile }),
+    fetchImpl: createTailcatUpdateFetch({
+      isTunneled: () => activeConfig?.tailcat === true,
+      getServerUrl: () => activeConfig?.server ?? '',
+      getToken: () => activeConfig?.token ?? '',
+    }),
     onStatus: status => { if (!win.isDestroyed()) win.webContents.send('dune-rpc:main:e:update-status', status); },
+    canUseAsarUpdate: canApplyAsarUpdate,
+    onInstallAsar: info => applyAsarUpdateAndRestart({ ...info, quitApp: () => app.quit() }),
     onInstallFile: async file => {
+      if (isWindows && String(file).toLowerCase().endsWith('.exe')) {
+        spawn(file, ['/S', '/LAUNCH'], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+        app.quit();
+        return;
+      }
       const openError = await shell.openPath(file);
       if (openError) throw new Error(openError);
       app.quit();

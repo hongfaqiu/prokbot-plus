@@ -85,6 +85,13 @@ process.once('SIGINT', () => void stop('SIGINT'));
 
 try {
   await host.start();
+  try {
+    await host.getApi().setHostSettings({
+      featureFlagOverrides: { sand_multi_machine_local_exec: true },
+    });
+  } catch (error) {
+    console.warn('[local-host] failed to enable multi-machine local-exec routing:', error?.message ?? error);
+  }
   computers = observeHostComputers(host.getLocalExecBridge());
   gateway = await library.startGatewayServer({
     api: decorateLocalSharingApi({ api: { ...withLibraryCleanup(host.getApi(), host, library), localApplicationRpc: args => host.requireHostExtensions().api('mcp').applicationRpc(args) }, host }), subscribe: listener => host.subscribe(listener),

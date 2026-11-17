@@ -279,6 +279,11 @@ officialPreload(name => {
 }, preloadProcess);
 
 installWebviewFrames({ hostOrigin: () => server, vncOrigin: androidBoot.vncOrigin, tailcat: () => connection.tailcat === true, desktopTicket: gateway.desktopTicket });
+globalThis.__grokbotProfile = Object.freeze({
+  getAgent: id => gateway.command('getAgent', { id }),
+  setNotify: (id, isEnabled) => gateway.command('setAgentNotifyOnUpdates', { id, isEnabled }),
+  getWorkflows: id => gateway.command('getAgentWorkflows', { id }),
+});
 installLayoutFixes();
 if (anchorFallback) log(`[webview] CSS anchor positioning fallback active (${navigator.userAgent.match(/Chrome\/[\d.]+/)?.[0] ?? 'unknown'})`);
 
@@ -310,6 +315,8 @@ function back() {
 function paneBackButton() {
   const pane = document.querySelector('.sand-info-pane[data-open="true"]');
   if (!pane || !visible(pane)) return null;
+  const profileBack = pane.querySelector('.grokbot-bot-profile:not([hidden]) .grokbot-bot-profile__back');
+  if (profileBack && visible(profileBack)) return profileBack;
   return [...pane.querySelectorAll('.sand-info-pane__back button')].find(visible)
     ?? [...pane.querySelectorAll('.sand-info-pane__actions button')].filter(visible).pop() ?? null;
 }

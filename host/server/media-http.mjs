@@ -47,7 +47,7 @@ export async function serviceBytes(url, { apiKey, signal, method = 'GET', limit 
   return boundedBody(response, limit);
 }
 
-function publicAddress(address) {
+export function publicAddress(address) {
   const value = address.toLowerCase();
   if (isIP(value) === 4) {
     const [a, b] = value.split('.').map(Number);

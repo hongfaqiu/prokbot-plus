@@ -13,7 +13,7 @@
 - 界面用官方**桌面版**的界面，取自你自己下载的官方 Windows 安装包：推荐 1.1.0（和 Windows 客户端用同一个安装包），1.1.0 用不了时可以改用 0.71.2；
 - 外面套一个本项目编写的 Android 外壳（`shell/`），负责连接 Host、保存凭据、通知、文件和返回键等手机功能。
 
-Android 安装的是**本项目自开发的外壳** `dev.grokbot.local`：`versionName` **1.2.3**，`versionCode` **10203**。界面来源推荐 Windows **1.1.0**，也可以用 **0.71.2**。外壳升级不代表支持新版界面，也不会改变已安装应用的包名。
+Android 安装的是**本项目自开发的外壳** `dev.grokbot.local`：`versionName` **1.2.8**，`versionCode` **10208**。界面来源推荐 Windows **1.1.0**，也可以用 **0.71.2**。外壳升级不代表支持新版界面，也不会改变已安装应用的包名。
 
 ## 使用
 
@@ -27,8 +27,8 @@ node android/patchers/patch.mjs
 
 | 输出 | 用途 |
 | --- | --- |
-| `GrokBotLocal-1.2.3-android.apk` | 安装到手机；文件名使用外壳版本 |
-| `GrokBotLocal-1.2.3-android.patch.json` | 生成记录：外壳和界面来源版本、输入文件摘要、APK 摘要、签名证书指纹 |
+| `GrokBotLocal-1.2.8-android.apk` | 安装到手机；文件名使用外壳版本 |
+| `GrokBotLocal-1.2.8-android.patch.json` | 生成记录：外壳和界面来源版本、输入文件摘要、APK 摘要、签名证书指纹 |
 
 1.1.0 的界面用不了时，加 `--version 0.71.2` 改用 0.71.2 的界面（自动下载 `Grok_Bot_0.71.2_Setup.exe`），或用 `--source` 指定已下载的 0.71.2 安装包，工具按摘要识别版本。两种界面生成的 APK 文件名相同，再次生成时加 `--force` 覆盖旧输出，或用 `--output` 换个目录。两种 APK 的外壳和签名相同，可以直接覆盖安装，不会清除配对。
 

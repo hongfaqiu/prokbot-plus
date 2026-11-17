@@ -130,7 +130,7 @@ async function stageBridge(t) {
   await writeFile(join(dir, 'package.json'), '{"type":"module"}');
   for (const name of ['bridge.js', 'native.js', 'services.js', 'gateway.js', 'layout.js', 'webview.js', 'anchor-fallback.js'])
     await copyFile(new URL(name, client), join(dir, name));
-  for (const name of ['i18n.mjs', 'connectors.mjs', 'external-url.mjs', 'dictation.mjs'])
+  for (const name of ['i18n.mjs', 'connectors.mjs', 'external-url.mjs', 'dictation.mjs', 'sand-machines.mjs'])
     await copyFile(new URL(name, desktop), join(dir, 'desktop', name));
   await writeFile(join(dir, 'official-preload.js'), wrapPreload(fixturePreload));
   return pathToFileURL(join(dir, 'bridge.js')).href;

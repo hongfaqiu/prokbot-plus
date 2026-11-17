@@ -5,6 +5,21 @@ export const PHONE_QUERY = '(max-width: 599px)';
 
 const BACK_ICON = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
   + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>';
+const SHARE_ICON = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" '
+  + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<path d="M12 3v12"/><path d="M7.5 7.5L12 3l4.5 4.5"/><path d="M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></svg>';
+const MORE_ICON = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">'
+  + '<circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>';
+const CLOCK_ICON = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+  + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
+const FOLDER_ICON = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+  + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+const MONITOR_ICON = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+  + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>';
+const CHEVRON_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+  + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
 
 const fittedFrames = new WeakMap();
 /**
@@ -78,6 +93,20 @@ export function activityTime(at, now = Date.now(), locale = 'en') {
 // Called by the patched Bot row (patchers/renderer-patches.mjs).
 globalThis.grokbotActivityTime = at => activityTime(at, Date.now(), document.documentElement.lang || navigator.language);
 
+/**
+ * Formats the unread jump pill like the official phone app ("1个未读" / "1 unread")
+ * from the desktop button's `title` ("1 条未读消息" / "1 unread message").
+ */
+export function formatMoreUnreadsLabel(title, zh = isZhLocale()) {
+  const match = typeof title === 'string' ? title.match(/\d[\d,]*/) : null;
+  if (!match) return null;
+  const count = Number.parseInt(match[0].replaceAll(',', ''), 10);
+  if (!Number.isFinite(count) || count <= 0) return null;
+  if (/未讀/.test(title)) return `${count}個未讀`;
+  const useZh = /未读/.test(title) ? true : /\bunread\b/i.test(title) ? false : zh;
+  return useZh ? `${count}个未读` : `${count} unread`;
+}
+
 const phone = {
   query: null,
   screen: 'list',
@@ -90,6 +119,13 @@ const phone = {
   shownAt: -Infinity,
   fieldPointerAt: -Infinity,
   back: null,
+  infoOpen: false,
+  infoMode: 'profile',
+  infoPaneEl: null,
+  libraryDialogSeen: false,
+  bypassCapture: false,
+  profileEl: null,
+  profileState: new Map(),
 };
 
 export function isPhone() {
@@ -138,16 +174,427 @@ function backButton() {
   return phone.back = button;
 }
 
+function isZhLocale() {
+  return (document.documentElement.lang || navigator.language || '').toLowerCase().startsWith('zh');
+}
+
+function profileStrings() {
+  return isZhLocale() ? {
+    back: '返回',
+    share: '分享',
+    more: '更多操作',
+    edit: '编辑',
+    routines: '定时任务',
+    library: '资料库',
+    computer: '电脑',
+    notify: '通知',
+    notifyCaption: 'Bot完成任务或等你处理时通知你',
+    activeCount: n => `${n}已开启`,
+    idle: '空闲',
+  } : {
+    back: 'Back',
+    share: 'Share',
+    more: 'More options',
+    edit: 'Edit',
+    routines: 'Routines',
+    library: 'Library',
+    computer: 'Computer',
+    notify: 'Notifications',
+    notifyCaption: 'Notify when this Bot finishes a task or needs your input',
+    activeCount: n => `${n} active`,
+    idle: 'Idle',
+  };
+}
+
+function runBypassed(fn) {
+  phone.bypassCapture = true;
+  try { return fn(); }
+  finally { phone.bypassCapture = false; }
+}
+
+function triggerClick(element) {
+  if (!element) return;
+  if (typeof PointerEvent === 'function') {
+    element.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, cancelable: true, pointerId: 1, pointerType: 'touch', isPrimary: true, button: 0, buttons: 1,
+    }));
+  }
+  element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, buttons: 1, view: window }));
+  if (typeof PointerEvent === 'function') {
+    element.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true, cancelable: true, pointerId: 1, pointerType: 'touch', isPrimary: true, button: 0, buttons: 0,
+    }));
+  }
+  element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, button: 0, buttons: 0, view: window }));
+  element.click();
+}
+
+function openBotContextMenu() {
+  const currentItem = document.querySelector('.sand-agents-sidebar .sand-agent-item[aria-current="page"]');
+  if (!currentItem) return false;
+  currentItem.dispatchEvent(new MouseEvent('contextmenu', {
+    bubbles: true, cancelable: true, button: 2, buttons: 2, clientX: innerWidth - 28, clientY: 56, view: window,
+  }));
+  return true;
+}
+
+function getAgentProfileEntry(agentId) {
+  let entry = phone.profileState.get(agentId);
+  if (!entry) {
+    let notify = true;
+    try {
+      const saved = localStorage.getItem(`grokbot.notify.${agentId}`);
+      if (saved === 'false') notify = false;
+    } catch {}
+    entry = { notify, activeRoutines: null, loadedFor: '', loading: false };
+    phone.profileState.set(agentId, entry);
+  }
+  return entry;
+}
+
+function countDomWorkflows(pane) {
+  if (!pane) return null;
+  const rows = pane.querySelectorAll('[data-automation-row], [data-workflow-id]');
+  if (rows.length > 0) return rows.length;
+  return null;
+}
+
+function refreshBotProfileData(agentId) {
+  const api = globalThis.__grokbotProfile;
+  if (!agentId || !api) return;
+  const entry = getAgentProfileEntry(agentId);
+  if (entry.loading || entry.loadedFor === agentId) return;
+  entry.loading = true;
+  Promise.all([
+    api.getAgent?.(agentId).catch(() => null),
+    api.getWorkflows?.(agentId).catch(() => null),
+  ]).then(([agentRes, wfRes]) => {
+    const agentObj = agentRes?.agent ?? agentRes;
+    if (typeof agentObj?.notifyOnUpdatesEnabled === 'boolean') {
+      entry.notify = agentObj.notifyOnUpdatesEnabled;
+    }
+    const list = Array.isArray(wfRes?.workflows) ? wfRes.workflows
+      : Array.isArray(wfRes) ? wfRes : null;
+    if (list) {
+      entry.activeRoutines = list.filter(w => w && w.enabled !== false && w.paused !== true).length;
+    }
+    entry.loadedFor = agentId;
+    entry.loading = false;
+    renderBotProfile();
+  }).catch(() => { entry.loading = false; });
+}
+
+function closeInfoPane() {
+  const pane = document.querySelector('.sand-info-pane[data-open="true"]');
+  if (!pane) return;
+  runBypassed(() => {
+    const backBtns = [...pane.querySelectorAll('.sand-info-pane__back button')];
+    for (const btn of backBtns) btn.click();
+    setTimeout(() => {
+      runBypassed(() => {
+        const stillOpen = document.querySelector('.sand-info-pane[data-open="true"]');
+        if (!stillOpen) return;
+        const closeBtn = [...stillOpen.querySelectorAll('.sand-info-pane__actions button')].pop();
+        if (closeBtn) closeBtn.click();
+        else document.querySelector('.sand-chat-header__identity')?.click();
+      });
+    }, backBtns.length > 0 ? 40 : 0);
+  });
+}
+
+function waitForElement(finder, onFound, timeoutMs = 900) {
+  const start = performance.now();
+  const step = () => {
+    const el = finder();
+    if (el) { onFound(el); return; }
+    if (performance.now() - start < timeoutMs) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+function syncSubpageClasses() {
+  const classes = document.documentElement.classList;
+  const open = isPhone() && document.querySelector('.sand-info-pane[data-open="true"]') != null;
+  classes.toggle('grokbot-subpage-routines', open && phone.infoMode === 'routines');
+  classes.toggle('grokbot-subpage-computer', open && phone.infoMode === 'computer');
+}
+
+function openInfoSubpage(mode, { focusName = false } = {}) {
+  const pane = document.querySelector('.sand-info-pane[data-open="true"]');
+  if (!pane) return;
+  phone.infoMode = mode;
+  if (mode === 'library') phone.libraryDialogSeen = false;
+  const keepHub = mode === 'library';
+  document.documentElement.classList.toggle('grokbot-bot-profile-open', keepHub);
+  syncSubpageClasses();
+  if (phone.profileEl) phone.profileEl.hidden = !keepHub;
+
+  const returnToOverview = () => {
+    runBypassed(() => {
+      const backBtn = pane.querySelector('.sand-info-pane__back button');
+      if (backBtn) backBtn.click();
+    });
+  };
+
+  if (mode === 'edit') {
+    runBypassed(() => {
+      const settingsRow = pane.querySelector('[data-info-row="settings"]');
+      if (settingsRow) settingsRow.click();
+    });
+    if (focusName) {
+      waitForElement(
+        () => pane.querySelector('.sand-info-pane__section-content input'),
+        input => { input.focus(); input.select?.(); },
+      );
+    }
+    return;
+  }
+
+  if (mode === 'library') {
+    const clickLibraryButton = () => {
+      waitForElement(
+        () => [...pane.querySelectorAll('button, [role="button"]')].find(
+          btn => !btn.closest('.grokbot-bot-profile') && /library files|资料库/i.test(btn.textContent || ''),
+        ),
+        btn => runBypassed(() => btn.click()),
+      );
+    };
+    const settingsRow = pane.querySelector('[data-info-row="settings"]');
+    if (settingsRow) {
+      runBypassed(() => settingsRow.click());
+      clickLibraryButton();
+    } else {
+      clickLibraryButton();
+    }
+    return;
+  }
+
+  if (mode === 'computer' || mode === 'routines') {
+    returnToOverview();
+    waitForElement(
+      () => !pane.querySelector('.sand-info-pane__back button')
+        ? pane.querySelector('.sand-info-pane__section-content .ui-scroll-area__viewport, .sand-info-pane__section-content')
+        : null,
+      scroller => { scroller.scrollTop = 0; },
+    );
+  }
+}
+
+function ensureBotProfile(inner) {
+  if (phone.profileEl && phone.profileEl.parentElement === inner) return phone.profileEl;
+  const root = document.createElement('div');
+  root.className = 'grokbot-bot-profile';
+  root.hidden = true;
+  root.innerHTML = `
+    <div class="grokbot-bot-profile__topbar">
+      <button type="button" class="grokbot-bot-profile__icon-btn grokbot-bot-profile__back">${BACK_ICON}</button>
+      <div class="grokbot-bot-profile__right">
+        <button type="button" class="grokbot-bot-profile__icon-btn grokbot-bot-profile__share">${SHARE_ICON}</button>
+        <button type="button" class="grokbot-bot-profile__icon-btn grokbot-bot-profile__more">${MORE_ICON}</button>
+      </div>
+    </div>
+    <div class="grokbot-bot-profile__hero">
+      <div class="grokbot-bot-profile__avatar"></div>
+      <h2 class="grokbot-bot-profile__name"></h2>
+      <button type="button" class="grokbot-bot-profile__edit" data-profile-action="edit"></button>
+    </div>
+    <div class="grokbot-bot-profile__card">
+      <button type="button" class="grokbot-bot-profile__row" data-profile-action="routines">
+        <span class="grokbot-bot-profile__row-left">
+          <span class="grokbot-bot-profile__row-icon">${CLOCK_ICON}</span>
+          <span data-profile-label="routines"></span>
+        </span>
+        <span class="grokbot-bot-profile__row-right">
+          <span data-profile-meta="routines"></span>
+          ${CHEVRON_ICON}
+        </span>
+      </button>
+      <button type="button" class="grokbot-bot-profile__row" data-profile-action="library">
+        <span class="grokbot-bot-profile__row-left">
+          <span class="grokbot-bot-profile__row-icon">${FOLDER_ICON}</span>
+          <span data-profile-label="library"></span>
+        </span>
+        <span class="grokbot-bot-profile__row-right">${CHEVRON_ICON}</span>
+      </button>
+      <button type="button" class="grokbot-bot-profile__row" data-profile-action="computer">
+        <span class="grokbot-bot-profile__row-left">
+          <span class="grokbot-bot-profile__row-icon">${MONITOR_ICON}</span>
+          <span data-profile-label="computer"></span>
+        </span>
+        <span class="grokbot-bot-profile__row-right">
+          <span data-profile-meta="computer"></span>
+          ${CHEVRON_ICON}
+        </span>
+      </button>
+    </div>
+    <div class="grokbot-bot-profile__card">
+      <div class="grokbot-bot-profile__row" role="group">
+        <span class="grokbot-bot-profile__row-left">
+          <span data-profile-label="notify"></span>
+        </span>
+        <button type="button" role="switch" aria-checked="true" class="grokbot-bot-profile__switch" data-profile-toggle="notify">
+          <span class="grokbot-bot-profile__switch-thumb"></span>
+        </button>
+      </div>
+    </div>
+    <p class="grokbot-bot-profile__caption"></p>
+  `;
+
+  root.querySelector('.grokbot-bot-profile__back').addEventListener('click', closeInfoPane);
+  root.querySelector('.grokbot-bot-profile__share').addEventListener('click', () => {
+    const controls = [...document.querySelectorAll('.sand-chat-header__controls button')];
+    const target = controls[0];
+    if (target) {
+      triggerClick(target);
+      setTimeout(() => {
+        const hasOpen = document.querySelector('[role="menu"], [role="dialog"], [data-component="menu-positioner"]:not([data-closed])');
+        if (!hasOpen && target.getAttribute('aria-expanded') !== 'true') {
+          openBotContextMenu();
+        }
+      }, 60);
+      return;
+    }
+    openBotContextMenu();
+  });
+  root.querySelector('.grokbot-bot-profile__more').addEventListener('click', () => {
+    const controls = [...document.querySelectorAll('.sand-chat-header__controls button')];
+    if (controls.length >= 2) { triggerClick(controls[1]); return; }
+    if (!openBotContextMenu() && controls[0]) triggerClick(controls[0]);
+  });
+  for (const actionBtn of root.querySelectorAll('[data-profile-action]')) {
+    actionBtn.addEventListener('click', () => openInfoSubpage(actionBtn.dataset.profileAction));
+  }
+  const notifySwitch = root.querySelector('[data-profile-toggle="notify"]');
+  notifySwitch.addEventListener('click', () => {
+    const agentId = phone.agent || currentAgentId();
+    if (!agentId) return;
+    const entry = getAgentProfileEntry(agentId);
+    const prev = entry.notify;
+    const next = !prev;
+    entry.notify = next;
+    notifySwitch.setAttribute('aria-checked', String(next));
+    try { localStorage.setItem(`grokbot.notify.${agentId}`, String(next)); } catch {}
+    const api = globalThis.__grokbotProfile;
+    if (api?.setNotify) {
+      api.setNotify(agentId, next).catch(() => {
+        entry.notify = prev;
+        notifySwitch.setAttribute('aria-checked', String(prev));
+        try { localStorage.setItem(`grokbot.notify.${agentId}`, String(prev)); } catch {}
+      });
+    }
+  });
+
+  inner.append(root);
+  phone.profileEl = root;
+  return root;
+}
+
+function setText(el, text) {
+  if (el && el.textContent !== text) el.textContent = text;
+}
+
+function setAttr(el, name, value) {
+  if (el && el.getAttribute(name) !== value) el.setAttribute(name, value);
+}
+
+function renderBotProfile() {
+  const pane = document.querySelector('.sand-info-pane[data-open="true"]');
+  const inner = pane?.querySelector('.sand-info-pane__inner');
+  const open = isPhone() && pane != null && inner != null;
+  if (!open) {
+    if (phone.infoOpen) {
+      phone.infoOpen = false;
+      phone.infoMode = 'profile';
+      phone.infoPaneEl = null;
+      phone.libraryDialogSeen = false;
+    }
+    document.documentElement.classList.remove('grokbot-bot-profile-open', 'grokbot-subpage-routines', 'grokbot-subpage-computer');
+    if (phone.profileEl && !phone.profileEl.hidden) phone.profileEl.hidden = true;
+    return;
+  }
+  if (!phone.infoOpen || phone.infoPaneEl !== pane) {
+    phone.infoOpen = true;
+    phone.infoMode = 'profile';
+    phone.infoPaneEl = pane;
+    phone.libraryDialogSeen = false;
+    const agentId = phone.agent || currentAgentId();
+    if (agentId) {
+      const entry = getAgentProfileEntry(agentId);
+      entry.loadedFor = '';
+      refreshBotProfileData(agentId);
+    }
+  }
+  if (phone.infoMode === 'library') {
+    const libDialog = [...document.querySelectorAll('[role="dialog"]')].find(
+      d => /library files|shared files|资料库/i.test(d.textContent || ''),
+    );
+    if (libDialog) {
+      phone.libraryDialogSeen = true;
+    } else if (phone.libraryDialogSeen) {
+      phone.libraryDialogSeen = false;
+      phone.infoMode = 'profile';
+      runBypassed(() => pane.querySelector('.sand-info-pane__back button')?.click());
+    }
+  }
+  const root = ensureBotProfile(inner);
+  const showHub = phone.infoMode === 'profile' || phone.infoMode === 'library';
+  document.documentElement.classList.toggle('grokbot-bot-profile-open', showHub);
+  syncSubpageClasses();
+  if (root.hidden === showHub) root.hidden = !showHub;
+  if (!showHub) return;
+
+  const s = profileStrings();
+  const title = document.querySelector('.sand-chat-header__title')?.textContent?.trim() || 'Bot';
+  setAttr(root.querySelector('.grokbot-bot-profile__back'), 'aria-label', s.back);
+  setAttr(root.querySelector('.grokbot-bot-profile__share'), 'aria-label', s.share);
+  setAttr(root.querySelector('.grokbot-bot-profile__more'), 'aria-label', s.more);
+  setText(root.querySelector('.grokbot-bot-profile__name'), title);
+  setText(root.querySelector('.grokbot-bot-profile__edit'), s.edit);
+  setText(root.querySelector('[data-profile-label="routines"]'), s.routines);
+  setText(root.querySelector('[data-profile-label="library"]'), s.library);
+  setText(root.querySelector('[data-profile-label="computer"]'), s.computer);
+  setText(root.querySelector('[data-profile-label="notify"]'), s.notify);
+  setText(root.querySelector('.grokbot-bot-profile__caption'), s.notifyCaption);
+
+  const avatarSlot = root.querySelector('.grokbot-bot-profile__avatar');
+  const headerAvatar = document.querySelector('.sand-chat-header__avatar > *, .sand-chat-header__avatar');
+  if (headerAvatar) {
+    const key = headerAvatar.outerHTML.slice(0, 120) + title;
+    if (avatarSlot.dataset.key !== key) {
+      avatarSlot.dataset.key = key;
+      const clone = headerAvatar.cloneNode(true);
+      clone.removeAttribute?.('style');
+      for (const el of clone.querySelectorAll?.('[style]') ?? []) el.removeAttribute('style');
+      avatarSlot.replaceChildren(clone);
+    }
+  }
+
+  const agentId = phone.agent || currentAgentId();
+  const entry = agentId ? getAgentProfileEntry(agentId) : null;
+  const domCount = countDomWorkflows(pane);
+  const routineCount = entry?.activeRoutines ?? domCount;
+  setText(
+    root.querySelector('[data-profile-meta="routines"]'),
+    typeof routineCount === 'number' ? s.activeCount(routineCount) : '',
+  );
+
+  const computerText = pane.querySelector('[class*="computer"] [class*="status"], .sand-computer-card__status')?.textContent?.trim() || s.idle;
+  setText(root.querySelector('[data-profile-meta="computer"]'), computerText);
+
+  setAttr(root.querySelector('[data-profile-toggle="notify"]'), 'aria-checked', String(entry ? entry.notify !== false : true));
+}
+
 function updatePhone() {
   const chat = document.querySelector('.sand-chat');
   const button = backButton();
-  button.setAttribute('aria-label', document.documentElement.lang.startsWith('zh') ? '返回' : 'Back');
+  setAttr(button, 'aria-label', isZhLocale() ? '返回' : 'Back');
   if (chat && button.parentElement !== chat) chat.append(button);
 
   const current = currentAgentId(), listed = listedAgents(), now = performance.now();
   if (current !== phone.agent) {
     const previous = phone.agent;
     phone.agent = current;
+    phone.infoMode = 'profile';
     const creating = current !== null && now - phone.creatingAt < 20000;
     const next = screenAfterAgentChange({ previous, current, screen: phone.screen,
       previousListed: previous == null || listed.has(previous), currentKnown: current == null || phone.known.has(current),
@@ -171,20 +618,32 @@ function updatePhone() {
   if (newChat && !phone.newChat && now - phone.interactedAt < 2000) setScreen('chat');
   phone.newChat = newChat;
 
-  // The details pane has no title of its own on its first page; show the Bot's name there.
+  // The details pane has no title of its own on its first page; show the Bot's name (or dedicated subpage title).
   const top = document.querySelector('.sand-info-pane[data-open="true"] .sand-info-pane__top');
   if (top) {
+    const s = profileStrings();
     const title = top.querySelector('.sand-info-pane__subpage-title') ? ''
+      : phone.infoMode === 'routines' ? s.routines
+      : phone.infoMode === 'computer' ? s.computer
       : document.querySelector('.sand-chat-header__title')?.textContent?.trim() ?? '';
     if (title && top.dataset.grokbotTitle !== title) top.dataset.grokbotTitle = title;
     else if (!title && top.dataset.grokbotTitle !== undefined) delete top.dataset.grokbotTitle;
   }
+  renderBotProfile();
   if (phone.screen === 'chat' && !current && !newChat && listed.size > 0 && now - phone.shownAt > 2000) {
     setScreen('list');
   }
   if (isPhone()) {
     for (const element of [document.documentElement, document.body, chat, document.querySelector('.sand-virtual-transcript')]) {
       if (element && element.scrollLeft !== 0) element.scrollLeft = 0;
+    }
+    for (const btn of document.querySelectorAll('.sand-agents-more-unreads')) {
+      const label = formatMoreUnreadsLabel(btn.getAttribute('title'));
+      if (label) {
+        if (btn.dataset.grokbotLabel !== label) btn.dataset.grokbotLabel = label;
+      } else if (btn.dataset.grokbotLabel !== undefined) {
+        delete btn.dataset.grokbotLabel;
+      }
     }
     addMarketplaceEntry();
   }
@@ -230,6 +689,47 @@ function installPhone() {
 
   addEventListener('click', event => {
     if (!isPhone() || !(event.target instanceof Element)) return;
+    if (event.target.closest('.sand-chat-header__identity')) {
+      phone.infoMode = 'profile';
+      phone.libraryDialogSeen = false;
+      requestAnimationFrame(renderBotProfile);
+    }
+    if (phone.infoOpen && phone.infoMode === 'profile') {
+      const renameItem = event.target.closest('[role="menuitem"]');
+      if (renameItem && /rename|重命名/i.test(renameItem.textContent || '')) {
+        event.preventDefault();
+        event.stopPropagation();
+        const menuTarget = renameItem.closest('[role="menu"], [data-component="menu-popup"]') || document.activeElement || document;
+        for (const type of ['keydown', 'keyup']) {
+          menuTarget.dispatchEvent(new KeyboardEvent(type, { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+        }
+        openInfoSubpage('edit', { focusName: true });
+        return;
+      }
+    }
+    if (!phone.bypassCapture && phone.infoMode !== 'profile') {
+      const subpageBack = event.target.closest('.sand-info-pane__back button')
+        || event.target.closest('.sand-info-pane__top:not(:has(.sand-info-pane__back)) .sand-info-pane__actions > button:last-child');
+      if (subpageBack) {
+        event.preventDefault();
+        event.stopPropagation();
+        const prevMode = phone.infoMode;
+        phone.infoMode = 'profile';
+        if (prevMode === 'edit' || prevMode === 'library') {
+          runBypassed(() => {
+            const pane = document.querySelector('.sand-info-pane[data-open="true"]');
+            pane?.querySelector('.sand-info-pane__back button')?.click();
+            if (prevMode === 'library') {
+              setTimeout(() => runBypassed(() => {
+                document.querySelector('.sand-info-pane[data-open="true"] .sand-info-pane__back button')?.click();
+              }), 40);
+            }
+          });
+        }
+        renderBotProfile();
+        return;
+      }
+    }
     // "Create" in the new Bot sheet: the new Bot's conversation opens once the Host has made it.
     if (event.target.closest('.sand-create-bot-dialog > :last-child > button[data-variant="primary"]'))
       phone.creatingAt = performance.now();
@@ -276,8 +776,20 @@ export function installLayoutFixes() {
     updatePhone();
   };
   const schedule = () => { if (!scheduled) { scheduled = true; requestAnimationFrame(run); } };
-  new MutationObserver(schedule).observe(document.documentElement,
-    { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'aria-current', 'data-open'] });
+  new MutationObserver(mutations => {
+    for (const m of mutations) {
+      if (m.attributeName === 'data-open' && m.target instanceof Element && m.target.classList.contains('sand-info-pane')) {
+        if (m.target.getAttribute('data-open') !== 'true') {
+          phone.infoOpen = false;
+          phone.infoMode = 'profile';
+          phone.libraryDialogSeen = false;
+        }
+      }
+    }
+    if (mutations.every(m => m.target instanceof Element && m.target.closest('.grokbot-bot-profile'))) return;
+    schedule();
+  }).observe(document.documentElement,
+    { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'aria-current', 'data-open', 'title'] });
   addEventListener('resize', schedule);
   addEventListener('focusin', schedule, true);
   schedule();

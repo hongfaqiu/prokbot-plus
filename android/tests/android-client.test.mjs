@@ -18,7 +18,7 @@ const repo = path.resolve(here, '../..');
 async function loadClient() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'grokbot-android-client-'));
   await cp(path.join(repo, 'android/client'), root, { recursive: true });
-  for (const name of ['i18n.mjs', 'external-url.mjs', 'connectors.mjs', 'dictation.mjs'])
+  for (const name of ['i18n.mjs', 'external-url.mjs', 'connectors.mjs', 'dictation.mjs', 'sand-machines.mjs'])
     await cp(path.join(repo, 'mac/clients/desktop', name), path.join(root, 'desktop', name));
   const load = name => import(pathToFileURL(path.join(root, name)).href);
   return { root, services: await load('services.js'), webview: await load('webview.js'), gateway: await load('gateway.js'),
@@ -619,3 +619,33 @@ test('android.css and MainActivity guard against phone horizontal overflow and W
   assert.match(activitySrc, /onReceivedError/);
   assert.match(activitySrc, /onReceivedHttpError/);
 });
+
+test('formatMoreUnreadsLabel formats unread count pill text across locales and edge inputs', () => {
+  const { formatMoreUnreadsLabel } = client.layout;
+  assert.equal(formatMoreUnreadsLabel('1 条未读消息', true), '1个未读');
+  assert.equal(formatMoreUnreadsLabel('12 条未读消息', false), '12个未读');
+  assert.equal(formatMoreUnreadsLabel('3 則未讀訊息', false), '3個未讀');
+  assert.equal(formatMoreUnreadsLabel('1 unread message', false), '1 unread');
+  assert.equal(formatMoreUnreadsLabel('1,234 unread messages', true), '1234 unread');
+  assert.equal(formatMoreUnreadsLabel('5 items', true), '5个未读');
+  assert.equal(formatMoreUnreadsLabel('0 unread messages', false), null);
+  assert.equal(formatMoreUnreadsLabel('More unreads', true), null);
+  assert.equal(formatMoreUnreadsLabel(null, true), null);
+});
+
+test('android.css positions unread pill above search bar and keeps expanded composer full-width without clipping buttons', async () => {
+  const [css, layoutSrc] = await Promise.all([
+    readFile(path.join(repo, 'android/client/android.css'), 'utf8'),
+    readFile(path.join(repo, 'android/client/layout.js'), 'utf8'),
+  ]);
+  assert.match(css, /button\.sand-agents-more-unreads:not\(\[data-direction="above"\]\)[^}]*bottom:\s*68px\s*!important/);
+  assert.match(css, /button\.sand-agents-more-unreads\[data-direction="above"\][^}]*top:\s*10px\s*!important/);
+  assert.match(css, /button\.sand-agents-more-unreads\[data-grokbot-label\]::before\s*\{[^}]*content:\s*attr\(data-grokbot-label\)/);
+  assert.doesNotMatch(css, /\.sand-prompt-form\s*\{\s*padding-left:\s*52px/);
+  assert.doesNotMatch(css, /\.sand-prompt-shell:not\(\[data-expanded\]\):has\(\.sand-prompt-field > p\.is-editor-empty:only-child\)\s+\.sand-prompt-pad/);
+  assert.match(css, /\.sand-prompt-shell:has\(\.sand-prompt-field > p\.is-editor-empty:only-child\)\s+\.sand-prompt-send\[type="button"\]/);
+  assert.match(css, /\.sand-prompt-shell\[data-expanded\]:not\(\[data-expanded="false"\]\)\s+\.sand-prompt-pad\s*\{[^}]*padding:\s*10px\s+16px\s+46px\s+16px\s*!important/);
+  assert.match(css, /\.sand-prompt-ghost-mic-seat:not\(\.sand-nalus7\):not\(:has\(\.sand-prompt-mic\[inert\]\)\)\s*\{[^}]*width:\s*32px\s*!important[^}]*overflow:\s*visible\s*!important/);
+  assert.match(layoutSrc, /attributeFilter:\s*\[[^\]]*'title'/);
+});
+
