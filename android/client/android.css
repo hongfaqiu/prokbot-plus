@@ -569,6 +569,47 @@ html.grokbot-phone .sand-message {
   max-width: 100% !important;
   box-sizing: border-box !important;
 }
+html.grokbot-phone .sand-transcript-row {
+  position: relative;
+}
+html.grokbot-phone .sand-message-action-anchor {
+  touch-action: pan-y;
+  transition: translate 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: translate;
+}
+html.grokbot-phone .sand-message-action-anchor.grokbot-swipe-dragging {
+  transition: none !important;
+  translate: var(--grokbot-swipe-drag, 0px) 0 !important;
+}
+html.grokbot-phone.grokbot-swipe-probing .sand-message-hover-actions {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+html.grokbot-phone .grokbot-swipe-reply-badge {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  width: 32px;
+  height: 32px;
+  border-radius: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: var(--grokbot-fill-3);
+  color: var(--grokbot-label-2);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  opacity: 0;
+  z-index: 4;
+  transition: opacity 180ms ease, transform 180ms ease, background-color 140ms ease, color 140ms ease;
+}
+html.grokbot-phone .grokbot-swipe-reply-badge.grokbot-swipe-reply-badge--active {
+  transition: background-color 140ms ease, color 140ms ease;
+}
+html.grokbot-phone .grokbot-swipe-reply-badge.grokbot-swipe-reply-badge--ready {
+  background: var(--cursor-text-primary, #1c1c1c);
+  color: #fff;
+}
 html.grokbot-phone .sand-message-action-anchor[data-role]:not(#\#):not(#\#):not(#\#):not(#\#) {
   max-width: calc(100% - 28px) !important;
   min-width: 0 !important;

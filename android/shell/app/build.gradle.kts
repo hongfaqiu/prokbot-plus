@@ -12,8 +12,8 @@ android {
         minSdk = 28
         targetSdk = 36
         // Project-owned Android release; the Windows renderer is pinned separately.
-        versionCode = 10208
-        versionName = "1.2.8"
+        versionCode = 10209
+        versionName = "1.2.9"
     }
 
     buildTypes {

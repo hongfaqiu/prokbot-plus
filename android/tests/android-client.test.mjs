@@ -649,3 +649,27 @@ test('android.css positions unread pill above search bar and keeps expanded comp
   assert.match(layoutSrc, /attributeFilter:\s*\[[^\]]*'title'/);
 });
 
+test('swipeReplyDisplacement and findReplyActionButton handle swipe-left quote curves and hover buttons', () => {
+  const { swipeReplyDisplacement, findReplyActionButton } = client.layout;
+  assert.equal(swipeReplyDisplacement(0), 0);
+  assert.equal(swipeReplyDisplacement(24), 0);
+  assert.equal(swipeReplyDisplacement(-30), -30);
+  assert.equal(swipeReplyDisplacement(-56), -56);
+  assert.ok(swipeReplyDisplacement(-100) < -56 && swipeReplyDisplacement(-100) >= -76);
+  assert.equal(swipeReplyDisplacement(-10000), -76);
+
+  const mkBtn = (label, hasPopup = false) => ({
+    getAttribute: k => (k === 'aria-label' ? label : null),
+    hasAttribute: k => k === 'aria-haspopup' && hasPopup,
+  });
+  const mkAnchor = buttons => ({ querySelectorAll: () => buttons });
+
+  const zhBtn = mkBtn('回复 ikun 的消息');
+  assert.equal(findReplyActionButton(mkAnchor([mkBtn('Expand'), zhBtn, mkBtn('More options', true)])), zhBtn);
+
+  const svBtn = mkBtn('Svara på meddelande');
+  assert.equal(findReplyActionButton(mkAnchor([mkBtn('展開'), svBtn, mkBtn('Fler val', true)])), svBtn);
+  assert.equal(findReplyActionButton(mkAnchor([mkBtn('Expand'), mkBtn('More', true)])), null);
+  assert.equal(findReplyActionButton(null), null);
+});
+

@@ -20,6 +20,36 @@ const MONITOR_ICON = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none
   + '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>';
 const CHEVRON_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
   + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
+const REPLY_SWIPE_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+  + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>';
+
+const SWIPE_SLOP_PX = 10;
+const SWIPE_TRIGGER_PX = 56;
+const SWIPE_MAX_PX = 76;
+const REPLY_LABEL_RE = /reply|回复|回覆|respond|antworten|répondre|responder|rispondi|ответить|返信|답장/i;
+const EXPAND_LABEL_RE = /expand|展开|展開|fullscreen|全屏|全螢幕/i;
+
+/** Maps a left-swipe delta (`dx < 0`) to bounded bubble translation with rubber-band resistance beyond `threshold`. */
+export function swipeReplyDisplacement(dx, threshold = SWIPE_TRIGGER_PX, maxDrag = SWIPE_MAX_PX) {
+  if (!Number.isFinite(dx) || dx >= 0) return 0;
+  const dist = -dx;
+  if (dist <= threshold) return -dist;
+  return -Math.min(threshold + Math.sqrt(dist - threshold) * 2, maxDrag);
+}
+
+/** Resolves the native Reply button rendered inside `.sand-message-hover-actions` of an action anchor. */
+export function findReplyActionButton(anchor) {
+  if (!anchor) return null;
+  const buttons = [...anchor.querySelectorAll('.sand-message-hover-actions button')];
+  if (!buttons.length) return null;
+  const labeled = buttons.find(btn => REPLY_LABEL_RE.test(btn.getAttribute('aria-label') || ''));
+  if (labeled) return labeled;
+  const nonMenu = buttons.filter(btn =>
+    !btn.hasAttribute('aria-haspopup') && !EXPAND_LABEL_RE.test(btn.getAttribute('aria-label') || ''),
+  );
+  return nonMenu.length ? nonMenu[nonMenu.length - 1] : null;
+}
 
 const fittedFrames = new WeakMap();
 /**
@@ -124,6 +154,7 @@ const phone = {
   infoPaneEl: null,
   libraryDialogSeen: false,
   bypassCapture: false,
+  swipeSuppressedUntil: -Infinity,
   profileEl: null,
   profileState: new Map(),
 };
@@ -678,6 +709,202 @@ function addMarketplaceEntry() {
   menu.querySelector('[role^="menuitem"]').before(entry);
 }
 
+function dispatchHoverEdge(anchor, type) {
+  if (!anchor?.isConnected) return;
+  const entering = type === 'pointerenter';
+  const bubblePointer = entering ? 'pointerover' : 'pointerout';
+  const bubbleMouse = entering ? 'mouseover' : 'mouseout';
+  const directMouse = entering ? 'mouseenter' : 'mouseleave';
+  const relatedTarget = document.body;
+  if (typeof PointerEvent === 'function') {
+    anchor.dispatchEvent(new PointerEvent(bubblePointer, { bubbles: true, cancelable: false, pointerId: 1, pointerType: 'mouse', relatedTarget }));
+    anchor.dispatchEvent(new PointerEvent(type, { bubbles: false, cancelable: false, pointerId: 1, pointerType: 'mouse', relatedTarget }));
+  }
+  anchor.dispatchEvent(new MouseEvent(bubbleMouse, { bubbles: true, cancelable: false, relatedTarget }));
+  anchor.dispatchEvent(new MouseEvent(directMouse, { bubbles: false, cancelable: false, relatedTarget }));
+}
+
+function triggerSwipeReply(anchor) {
+  if (!anchor?.isConnected) return;
+  const root = document.documentElement;
+  root.classList.add('grokbot-swipe-probing');
+  dispatchHoverEdge(anchor, 'pointerenter');
+
+  const cleanup = () => {
+    dispatchHoverEdge(anchor, 'pointerleave');
+    root.classList.remove('grokbot-swipe-probing');
+  };
+
+  const focusPrompt = () => {
+    phone.fieldPointerAt = performance.now();
+    const prompt = document.querySelector('.sand-prompt-form [contenteditable="true"], .sand-prompt-form textarea');
+    if (prompt instanceof HTMLElement) prompt.focus({ preventScroll: true });
+  };
+
+  let frames = 0;
+  const step = () => {
+    const btn = findReplyActionButton(anchor);
+    if (btn) {
+      runBypassed(() => btn.click());
+      cleanup();
+      requestAnimationFrame(focusPrompt);
+      return;
+    }
+    if (++frames < 12 && anchor.isConnected) {
+      requestAnimationFrame(step);
+      return;
+    }
+    // Fallback: open message context menu silently if hover toolbar wasn't mounted.
+    const rect = anchor.getBoundingClientRect();
+    anchor.dispatchEvent(new MouseEvent('contextmenu', {
+      bubbles: true, cancelable: true, button: 2, buttons: 2,
+      clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2, view: window,
+    }));
+    let menuFrames = 0;
+    const pickMenuItem = () => {
+      const item = [...document.querySelectorAll('[role="menuitem"]')].find(el => REPLY_LABEL_RE.test(el.textContent || ''));
+      if (item) {
+        runBypassed(() => item.click());
+        cleanup();
+        requestAnimationFrame(focusPrompt);
+        return;
+      }
+      if (++menuFrames < 8) requestAnimationFrame(pickMenuItem);
+      else cleanup();
+    };
+    requestAnimationFrame(pickMenuItem);
+  };
+  requestAnimationFrame(step);
+}
+
+function canConsumeHorizontalSwipe(target, transcript) {
+  const sel = window.getSelection();
+  if (sel && !sel.isCollapsed && sel.toString().length > 0) return true;
+  if (!(target instanceof Element)) return false;
+  if (target.closest('input, textarea, [contenteditable]:not([contenteditable="false"]), video, [role="slider"]')) return true;
+  for (let node = target; node && node !== transcript; node = node.parentElement) {
+    if (node.scrollWidth - node.clientWidth <= 1) continue;
+    const overflowX = getComputedStyle(node).overflowX;
+    if ((overflowX === 'auto' || overflowX === 'scroll') && node.scrollLeft < node.scrollWidth - node.clientWidth - 1) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function installMessageSwipeReply() {
+  let active = null;
+
+  const clearVisuals = (anchor, badge, immediate) => {
+    anchor.classList.remove('grokbot-swipe-dragging');
+    anchor.style.removeProperty('--grokbot-swipe-drag');
+    if (!badge) return;
+    badge.classList.remove('grokbot-swipe-reply-badge--active', 'grokbot-swipe-reply-badge--ready');
+    badge.style.opacity = '0';
+    badge.style.transform = 'translateY(-50%) scale(0.55)';
+    if (immediate) badge.remove();
+    else setTimeout(() => { if (!badge.classList.contains('grokbot-swipe-reply-badge--active')) badge.remove(); }, 220);
+  };
+
+  addEventListener('touchstart', event => {
+    active = null;
+    if (!isPhone() || phone.screen !== 'chat' || paneLayerOpen() || computerStageOpen()) return;
+    if (event.touches.length !== 1 || !(event.target instanceof Element)) return;
+    const transcript = event.target.closest('.sand-virtual-transcript');
+    const anchor = event.target.closest('.sand-message-action-anchor');
+    if (!transcript || !anchor || canConsumeHorizontalSwipe(event.target, transcript)) return;
+    const touch = event.touches[0];
+    active = {
+      anchor,
+      row: anchor.closest('.sand-transcript-row') || anchor.parentElement,
+      startX: touch.clientX,
+      startY: touch.clientY,
+      locked: '',
+      committed: false,
+      thresholdReached: false,
+      badge: null,
+      replyChecked: false,
+      replyAllowed: true,
+    };
+  }, { passive: true, capture: true });
+
+  addEventListener('touchmove', event => {
+    if (!active || event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    const dx = touch.clientX - active.startX;
+    const dy = touch.clientY - active.startY;
+    if (!active.locked) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_SLOP_PX) return;
+      if (dx < 0 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+        active.locked = 'x';
+        document.documentElement.classList.add('grokbot-swipe-probing');
+        dispatchHoverEdge(active.anchor, 'pointerenter');
+        const state = active;
+        requestAnimationFrame(() => {
+          if (active !== state || !state.anchor.isConnected) return;
+          if (state.anchor.querySelector('.sand-message-hover-actions')) {
+            state.replyChecked = true;
+            state.replyAllowed = findReplyActionButton(state.anchor) != null;
+            if (!state.replyAllowed && state.badge) state.badge.style.display = 'none';
+          }
+        });
+        if (active.row) {
+          const badge = document.createElement('span');
+          badge.className = 'grokbot-swipe-reply-badge grokbot-swipe-reply-badge--active';
+          badge.setAttribute('aria-hidden', 'true');
+          badge.innerHTML = REPLY_SWIPE_ICON;
+          active.row.appendChild(badge);
+          active.badge = badge;
+        }
+      } else {
+        active = null;
+        return;
+      }
+    }
+    if (!active.replyAllowed) return;
+    event.preventDefault();
+    const drag = swipeReplyDisplacement(dx);
+    const progress = Math.min(1, Math.max(0, (-dx - 6) / (SWIPE_TRIGGER_PX - 6)));
+    active.anchor.classList.add('grokbot-swipe-dragging');
+    active.anchor.style.setProperty('--grokbot-swipe-drag', `${drag.toFixed(1)}px`);
+    const ready = -dx >= SWIPE_TRIGGER_PX;
+    if (active.badge) {
+      active.badge.style.opacity = String(progress);
+      active.badge.style.transform = `translateY(-50%) scale(${(0.55 + 0.45 * progress).toFixed(3)})`;
+      active.badge.classList.toggle('grokbot-swipe-reply-badge--ready', ready);
+    }
+    if (ready && !active.thresholdReached) {
+      active.thresholdReached = true;
+      try { navigator.vibrate?.(10); } catch {}
+    } else if (!ready) {
+      active.thresholdReached = false;
+    }
+    active.committed = ready;
+  }, { passive: false, capture: true });
+
+  const finish = event => {
+    if (!active) return;
+    const state = active;
+    active = null;
+    if (state.locked !== 'x') {
+      document.documentElement.classList.remove('grokbot-swipe-probing');
+      return;
+    }
+    const committed = event.type === 'touchend' && state.committed && state.replyAllowed;
+    clearVisuals(state.anchor, state.badge, event.type === 'touchcancel');
+    if (committed) {
+      phone.swipeSuppressedUntil = performance.now() + 250;
+      triggerSwipeReply(state.anchor);
+    } else {
+      dispatchHoverEdge(state.anchor, 'pointerleave');
+      setTimeout(() => { if (!active) document.documentElement.classList.remove('grokbot-swipe-probing'); }, 16);
+    }
+  };
+
+  addEventListener('touchend', finish, { passive: true, capture: true });
+  addEventListener('touchcancel', finish, { passive: true, capture: true });
+}
+
 function installPhone() {
   phone.query = matchMedia(PHONE_QUERY);
   const apply = () => {
@@ -686,9 +913,15 @@ function installPhone() {
   };
   phone.query.addEventListener('change', apply);
   apply();
+  installMessageSwipeReply();
 
   addEventListener('click', event => {
     if (!isPhone() || !(event.target instanceof Element)) return;
+    if (!phone.bypassCapture && phone.swipeSuppressedUntil > performance.now() && event.target.closest('.sand-virtual-transcript')) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     if (event.target.closest('.sand-chat-header__identity')) {
       phone.infoMode = 'profile';
       phone.libraryDialogSeen = false;
