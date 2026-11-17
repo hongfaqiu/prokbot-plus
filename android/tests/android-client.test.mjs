@@ -649,14 +649,20 @@ test('android.css positions unread pill above search bar and keeps expanded comp
   assert.match(layoutSrc, /attributeFilter:\s*\[[^\]]*'title'/);
 });
 
-test('swipeReplyDisplacement and findReplyActionButton handle swipe-left quote curves and hover buttons', () => {
-  const { swipeReplyDisplacement, findReplyActionButton } = client.layout;
+test('swipeReplyDisplacement, timestampPeekAmount and findReplyActionButton handle right-swipe quote and left-swipe timestamps', () => {
+  const { swipeReplyDisplacement, timestampPeekAmount, findReplyActionButton } = client.layout;
   assert.equal(swipeReplyDisplacement(0), 0);
-  assert.equal(swipeReplyDisplacement(24), 0);
-  assert.equal(swipeReplyDisplacement(-30), -30);
-  assert.equal(swipeReplyDisplacement(-56), -56);
-  assert.ok(swipeReplyDisplacement(-100) < -56 && swipeReplyDisplacement(-100) >= -76);
-  assert.equal(swipeReplyDisplacement(-10000), -76);
+  assert.equal(swipeReplyDisplacement(-24), 0);
+  assert.equal(swipeReplyDisplacement(30), 30);
+  assert.equal(swipeReplyDisplacement(56), 56);
+  assert.ok(swipeReplyDisplacement(100) > 56 && swipeReplyDisplacement(100) <= 76);
+  assert.equal(swipeReplyDisplacement(10000), 76);
+
+  assert.deepEqual(timestampPeekAmount(0), { peekPx: 0, progress: 0 });
+  assert.deepEqual(timestampPeekAmount(24), { peekPx: 0, progress: 0 });
+  assert.deepEqual(timestampPeekAmount(-24), { peekPx: 24, progress: 0.5 });
+  assert.deepEqual(timestampPeekAmount(-48), { peekPx: 48, progress: 1 });
+  assert.deepEqual(timestampPeekAmount(-200), { peekPx: 82, progress: 1 });
 
   const mkBtn = (label, hasPopup = false) => ({
     getAttribute: k => (k === 'aria-label' ? label : null),

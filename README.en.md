@@ -12,7 +12,7 @@ Windows · macOS · iOS client patches ｜ [Our own Android app (unofficial)](#a
   <a href="#client-versions"><img alt="Windows patch accepts 1.1.0 x64 (recommended), 0.71.2" src="https://img.shields.io/badge/Windows%20patch%20accepts-1.1.0%20x64%20(recommended)%2C%200.71.2-237E55?logo=windows&logoColor=white"></a>
   <a href="#client-versions"><img alt="macOS official 1.1.0 ARM64" src="https://img.shields.io/badge/macOS%20official-1.1.0%20ARM64-111111?logo=apple&logoColor=white"></a>
   <a href="#client-versions"><img alt="iOS official 1.25.0" src="https://img.shields.io/badge/iOS%20official-1.25.0-111111?logo=apple&logoColor=white"></a>
-  <a href="#client-versions"><img alt="Android shell 1.2.9" src="https://img.shields.io/badge/Unofficial%20Android-1.2.9-237E55?logo=android&logoColor=white"></a>
+  <a href="#client-versions"><img alt="Android shell 1.2.10" src="https://img.shields.io/badge/Unofficial%20Android-1.2.10-237E55?logo=android&logoColor=white"></a>
 <!-- client-badges:end -->
   <img alt="Host d0a4baa" src="https://img.shields.io/badge/Host-d0a4baa-2496ED?logo=docker&logoColor=white">
   <img alt="Noncommercial License" src="https://img.shields.io/badge/License-Noncommercial-6B7280">
@@ -110,7 +110,7 @@ See the [AI deployment guide](docs/AI-INSTALL.en.md#choose-a-deployment) for the
 | Windows x64 | [1.1.0](https://api2.cursor.sh/updates/api/download/stable/win32-x64-user/sand) | **1.1.0** (recommended); 0.71.2 if it does not work |
 | macOS ARM64 | [1.1.0](https://api2.cursor.sh/updates/api/download/stable/darwin-arm64/sand) | 0.71.2 (not yet adapted to 1.1.0; not tested on a Mac) |
 | iOS | [1.25.0](https://apps.apple.com/us/app/grok-bot/id6794501026) | 1.16.0 (build 23152; not tested on an iPhone or iPad) |
-| Android 9+ (unofficial) | Does not use the official Android app | App **1.2.9** (build 10209), interface taken from the Windows **1.1.0** installer (recommended; 0.71.2 if it does not work) |
+| Android 9+ (unofficial) | Does not use the official Android app | App **1.2.10** (build 10210), interface taken from the Windows **1.1.0** installer (recommended; 0.71.2 if it does not work) |
 | Linux server | n/a | Host `d0a4baa`; Bot computer `9d2ac1b` (x86_64) |
 
 ProkBot Plus has its own version numbers; see the [latest release](https://github.com/ferretgeek/prokbot-plus/releases/latest). The upstream ProkBot baseline is `3e9fe8c`.

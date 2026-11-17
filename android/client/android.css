@@ -569,6 +569,13 @@ html.grokbot-phone .sand-message {
   max-width: 100% !important;
   box-sizing: border-box !important;
 }
+html.grokbot-phone .sand-virtual-transcript {
+  touch-action: pan-y;
+}
+html.grokbot-phone .sand-virtual-transcript[data-peeking] .sand-row-content:not(.sand-b3owv9) {
+  transform: translate3d(calc(-1 * var(--sand-inline-sign, 1) * var(--sand-ts-peek, 0px)), 0, 0);
+  will-change: transform;
+}
 html.grokbot-phone .sand-transcript-row {
   position: relative;
 }
@@ -587,7 +594,7 @@ html.grokbot-phone.grokbot-swipe-probing .sand-message-hover-actions {
 }
 html.grokbot-phone .grokbot-swipe-reply-badge {
   position: absolute;
-  right: 12px;
+  left: 12px;
   top: 50%;
   width: 32px;
   height: 32px;

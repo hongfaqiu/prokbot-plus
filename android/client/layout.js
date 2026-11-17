@@ -27,15 +27,25 @@ const REPLY_SWIPE_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="
 const SWIPE_SLOP_PX = 10;
 const SWIPE_TRIGGER_PX = 56;
 const SWIPE_MAX_PX = 76;
+const TS_PEEK_MAX_PX = 82;
+const TS_PEEK_FULL_PX = 48;
+const TS_PEEK_OPEN_PX = 76;
+const TS_PEEK_HOLD_PX = 32;
 const REPLY_LABEL_RE = /reply|回复|回覆|respond|antworten|répondre|responder|rispondi|ответить|返信|답장/i;
 const EXPAND_LABEL_RE = /expand|展开|展開|fullscreen|全屏|全螢幕/i;
 
-/** Maps a left-swipe delta (`dx < 0`) to bounded bubble translation with rubber-band resistance beyond `threshold`. */
+/** Maps a right-swipe delta (`dx > 0`) to bounded bubble translation with rubber-band resistance beyond `threshold`. */
 export function swipeReplyDisplacement(dx, threshold = SWIPE_TRIGGER_PX, maxDrag = SWIPE_MAX_PX) {
-  if (!Number.isFinite(dx) || dx >= 0) return 0;
-  const dist = -dx;
-  if (dist <= threshold) return -dist;
-  return -Math.min(threshold + Math.sqrt(dist - threshold) * 2, maxDrag);
+  if (!Number.isFinite(dx) || dx <= 0) return 0;
+  if (dx <= threshold) return dx;
+  return Math.min(threshold + Math.sqrt(dx - threshold) * 2, maxDrag);
+}
+
+/** Maps a left-swipe delta (`dx < 0`) to timestamp peek offset (`0..82px`) and reveal progress (`0..1`). */
+export function timestampPeekAmount(dx, maxPeek = TS_PEEK_MAX_PX, fullPx = TS_PEEK_FULL_PX) {
+  if (!Number.isFinite(dx) || dx >= 0) return { peekPx: 0, progress: 0 };
+  const peekPx = Math.min(-dx, maxPeek);
+  return { peekPx, progress: Math.min(1, peekPx / fullPx) };
 }
 
 /** Resolves the native Reply button rendered inside `.sand-message-hover-actions` of an action anchor. */
@@ -777,7 +787,7 @@ function triggerSwipeReply(anchor) {
   requestAnimationFrame(step);
 }
 
-function canConsumeHorizontalSwipe(target, transcript) {
+function canConsumeHorizontalSwipe(target, transcript, direction) {
   const sel = window.getSelection();
   if (sel && !sel.isCollapsed && sel.toString().length > 0) return true;
   if (!(target instanceof Element)) return false;
@@ -785,17 +795,77 @@ function canConsumeHorizontalSwipe(target, transcript) {
   for (let node = target; node && node !== transcript; node = node.parentElement) {
     if (node.scrollWidth - node.clientWidth <= 1) continue;
     const overflowX = getComputedStyle(node).overflowX;
-    if ((overflowX === 'auto' || overflowX === 'scroll') && node.scrollLeft < node.scrollWidth - node.clientWidth - 1) {
-      return true;
-    }
+    if (overflowX !== 'auto' && overflowX !== 'scroll') continue;
+    if (direction === 'left' && node.scrollLeft < node.scrollWidth - node.clientWidth - 1) return true;
+    if (direction === 'right' && node.scrollLeft > 1) return true;
   }
   return false;
 }
 
 function installMessageSwipeReply() {
   let active = null;
+  let peekRaf = 0;
+  let peekTimer = 0;
+  let currentPeek = 0;
+  let currentHosts = [];
 
-  const clearVisuals = (anchor, badge, immediate) => {
+  const resolvePeekHosts = transcript => {
+    const hosts = [transcript];
+    const log = transcript?.querySelector('[role="log"].sand--default-marker');
+    if (log && log !== transcript) hosts.push(log);
+    return hosts;
+  };
+
+  const applyTsPeek = (hosts, peekPx) => {
+    currentPeek = peekPx;
+    const progress = Math.min(1, Math.max(0, peekPx / TS_PEEK_FULL_PX));
+    for (const host of hosts) {
+      if (!host?.isConnected) continue;
+      if (peekPx > 0) {
+        if (!host.hasAttribute('data-peeking')) host.setAttribute('data-peeking', '');
+        host.style.setProperty('--sand-ts-peek', `${peekPx.toFixed(1)}px`);
+        host.style.setProperty('--sand-ts-progress', progress.toFixed(3));
+      } else {
+        host.removeAttribute('data-peeking');
+        host.style.removeProperty('--sand-ts-peek');
+        host.style.removeProperty('--sand-ts-progress');
+      }
+    }
+  };
+
+  const cancelPeekTween = () => {
+    if (peekTimer) { clearTimeout(peekTimer); peekTimer = 0; }
+    if (peekRaf) { cancelAnimationFrame(peekRaf); peekRaf = 0; }
+  };
+
+  const collapseTsPeek = immediate => {
+    cancelPeekTween();
+    if (!currentHosts.length || currentPeek <= 0 || immediate) {
+      applyTsPeek(currentHosts, 0);
+      currentHosts = [];
+      return;
+    }
+    const hosts = currentHosts;
+    const startPeek = currentPeek;
+    const startAt = performance.now();
+    const duration = 300;
+    const step = now => {
+      const t = Math.min(1, (now - startAt) / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      applyTsPeek(hosts, startPeek * (1 - eased));
+      if (t < 1) {
+        peekRaf = requestAnimationFrame(step);
+      } else {
+        peekRaf = 0;
+        applyTsPeek(hosts, 0);
+        currentHosts = [];
+      }
+    };
+    peekRaf = requestAnimationFrame(step);
+  };
+
+  const clearReplyVisuals = (anchor, badge, immediate) => {
+    if (!anchor) return;
     anchor.classList.remove('grokbot-swipe-dragging');
     anchor.style.removeProperty('--grokbot-swipe-drag');
     if (!badge) return;
@@ -806,25 +876,35 @@ function installMessageSwipeReply() {
     else setTimeout(() => { if (!badge.classList.contains('grokbot-swipe-reply-badge--active')) badge.remove(); }, 220);
   };
 
+  addEventListener('scroll', () => {
+    if (!active && currentPeek > 0) collapseTsPeek(true);
+  }, { passive: true, capture: true });
+
   addEventListener('touchstart', event => {
     active = null;
     if (!isPhone() || phone.screen !== 'chat' || paneLayerOpen() || computerStageOpen()) return;
     if (event.touches.length !== 1 || !(event.target instanceof Element)) return;
     const transcript = event.target.closest('.sand-virtual-transcript');
+    if (!transcript) {
+      if (currentPeek > 0) collapseTsPeek(false);
+      return;
+    }
+    cancelPeekTween();
     const anchor = event.target.closest('.sand-message-action-anchor');
-    if (!transcript || !anchor || canConsumeHorizontalSwipe(event.target, transcript)) return;
     const touch = event.touches[0];
     active = {
+      transcript,
       anchor,
-      row: anchor.closest('.sand-transcript-row') || anchor.parentElement,
+      target: event.target,
+      row: anchor?.closest('.sand-transcript-row') || anchor?.parentElement || null,
       startX: touch.clientX,
       startY: touch.clientY,
-      locked: '',
+      startPeek: currentPeek,
+      mode: '', // 'reply' | 'peek'
       committed: false,
       thresholdReached: false,
       badge: null,
-      replyChecked: false,
-      replyAllowed: true,
+      replyAllowed: !!anchor,
     };
   }, { passive: true, capture: true });
 
@@ -833,17 +913,31 @@ function installMessageSwipeReply() {
     const touch = event.touches[0];
     const dx = touch.clientX - active.startX;
     const dy = touch.clientY - active.startY;
-    if (!active.locked) {
+    if (!active.mode) {
       if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_SLOP_PX) return;
-      if (dx < 0 && Math.abs(dx) > Math.abs(dy) * 1.2) {
-        active.locked = 'x';
+      if (Math.abs(dx) <= Math.abs(dy) * 1.2) {
+        if (currentPeek > 0) collapseTsPeek(true);
+        active = null;
+        return;
+      }
+      const dir = dx > 0 ? 'right' : 'left';
+      if (canConsumeHorizontalSwipe(active.target, active.transcript, dir)) {
+        active = null;
+        return;
+      }
+      if (dir === 'right') {
+        if (currentPeek > 0) collapseTsPeek(true);
+        if (!active.anchor) {
+          active = null;
+          return;
+        }
+        active.mode = 'reply';
         document.documentElement.classList.add('grokbot-swipe-probing');
         dispatchHoverEdge(active.anchor, 'pointerenter');
         const state = active;
         requestAnimationFrame(() => {
           if (active !== state || !state.anchor.isConnected) return;
           if (state.anchor.querySelector('.sand-message-hover-actions')) {
-            state.replyChecked = true;
             state.replyAllowed = findReplyActionButton(state.anchor) != null;
             if (!state.replyAllowed && state.badge) state.badge.style.display = 'none';
           }
@@ -857,17 +951,25 @@ function installMessageSwipeReply() {
           active.badge = badge;
         }
       } else {
-        active = null;
-        return;
+        active.mode = 'peek';
+        currentHosts = resolvePeekHosts(active.transcript);
       }
     }
+
+    if (active.mode === 'peek') {
+      event.preventDefault();
+      const { peekPx } = timestampPeekAmount(dx - active.startPeek);
+      applyTsPeek(currentHosts, peekPx);
+      return;
+    }
+
     if (!active.replyAllowed) return;
     event.preventDefault();
     const drag = swipeReplyDisplacement(dx);
-    const progress = Math.min(1, Math.max(0, (-dx - 6) / (SWIPE_TRIGGER_PX - 6)));
+    const progress = Math.min(1, Math.max(0, (dx - 6) / (SWIPE_TRIGGER_PX - 6)));
     active.anchor.classList.add('grokbot-swipe-dragging');
     active.anchor.style.setProperty('--grokbot-swipe-drag', `${drag.toFixed(1)}px`);
-    const ready = -dx >= SWIPE_TRIGGER_PX;
+    const ready = dx >= SWIPE_TRIGGER_PX;
     if (active.badge) {
       active.badge.style.opacity = String(progress);
       active.badge.style.transform = `translateY(-50%) scale(${(0.55 + 0.45 * progress).toFixed(3)})`;
@@ -886,12 +988,21 @@ function installMessageSwipeReply() {
     if (!active) return;
     const state = active;
     active = null;
-    if (state.locked !== 'x') {
+    if (state.mode === 'peek') {
+      if (event.type === 'touchcancel' || currentPeek < TS_PEEK_HOLD_PX) {
+        collapseTsPeek(event.type === 'touchcancel');
+      } else {
+        applyTsPeek(currentHosts, Math.max(currentPeek, TS_PEEK_OPEN_PX));
+        peekTimer = setTimeout(() => { peekTimer = 0; collapseTsPeek(false); }, 1050);
+      }
+      return;
+    }
+    if (state.mode !== 'reply') {
       document.documentElement.classList.remove('grokbot-swipe-probing');
       return;
     }
     const committed = event.type === 'touchend' && state.committed && state.replyAllowed;
-    clearVisuals(state.anchor, state.badge, event.type === 'touchcancel');
+    clearReplyVisuals(state.anchor, state.badge, event.type === 'touchcancel');
     if (committed) {
       phone.swipeSuppressedUntil = performance.now() + 250;
       triggerSwipeReply(state.anchor);
