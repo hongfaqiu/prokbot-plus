@@ -282,7 +282,8 @@ installWebviewFrames({ hostOrigin: () => server, vncOrigin: androidBoot.vncOrigi
 globalThis.__grokbotProfile = Object.freeze({
   getAgent: id => gateway.command('getAgent', { id }),
   setNotify: (id, isEnabled) => gateway.command('setAgentNotifyOnUpdates', { id, isEnabled }),
-  getWorkflows: id => gateway.command('getAgentWorkflows', { id }),
+  // Routines are the Host's automations; `getAgentWorkflows` lists the Bot's skills.
+  getAutomations: id => gateway.command('getAgentAutomations', { id }),
 });
 installLayoutFixes();
 if (anchorFallback) log(`[webview] CSS anchor positioning fallback active (${navigator.userAgent.match(/Chrome\/[\d.]+/)?.[0] ?? 'unknown'})`);

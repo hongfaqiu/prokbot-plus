@@ -161,6 +161,7 @@ const phone = {
   back: null,
   infoOpen: false,
   infoMode: 'profile',
+  infoReturn: null,
   infoPaneEl: null,
   libraryDialogSeen: false,
   bypassCapture: false,
@@ -295,9 +296,14 @@ function getAgentProfileEntry(agentId) {
 
 function countDomWorkflows(pane) {
   if (!pane) return null;
-  const rows = pane.querySelectorAll('[data-automation-row], [data-workflow-id]');
+  const rows = pane.querySelectorAll('[data-automation-row]');
   if (rows.length > 0) return rows.length;
   return null;
+}
+
+/** Routines that are switched on; the Host marks a paused one with `isEnabled: false`. */
+export function countActiveRoutines(list) {
+  return list.filter(item => item && item.isEnabled !== false && item.enabled !== false && item.paused !== true).length;
 }
 
 function refreshBotProfileData(agentId) {
@@ -308,17 +314,15 @@ function refreshBotProfileData(agentId) {
   entry.loading = true;
   Promise.all([
     api.getAgent?.(agentId).catch(() => null),
-    api.getWorkflows?.(agentId).catch(() => null),
+    api.getAutomations?.(agentId).catch(() => null),
   ]).then(([agentRes, wfRes]) => {
     const agentObj = agentRes?.agent ?? agentRes;
     if (typeof agentObj?.notifyOnUpdatesEnabled === 'boolean') {
       entry.notify = agentObj.notifyOnUpdatesEnabled;
     }
-    const list = Array.isArray(wfRes?.workflows) ? wfRes.workflows
+    const list = Array.isArray(wfRes?.automations) ? wfRes.automations
       : Array.isArray(wfRes) ? wfRes : null;
-    if (list) {
-      entry.activeRoutines = list.filter(w => w && w.enabled !== false && w.paused !== true).length;
-    }
+    if (list) entry.activeRoutines = countActiveRoutines(list);
     entry.loadedFor = agentId;
     entry.loading = false;
     renderBotProfile();
@@ -355,15 +359,19 @@ function waitForElement(finder, onFound, timeoutMs = 900) {
 
 function syncSubpageClasses() {
   const classes = document.documentElement.classList;
-  const open = isPhone() && document.querySelector('.sand-info-pane[data-open="true"]') != null;
-  classes.toggle('grokbot-subpage-routines', open && phone.infoMode === 'routines');
-  classes.toggle('grokbot-subpage-computer', open && phone.infoMode === 'computer');
+  const pane = isPhone() ? document.querySelector('.sand-info-pane[data-open="true"]') : null;
+  // Only the Overview page is split into Routines and Computer; once the pane shows one of its
+  // own subpages (Settings, Library) it must not be hidden by these rules.
+  const overview = pane != null && !pane.querySelector('.sand-info-pane__back');
+  classes.toggle('grokbot-subpage-routines', overview && phone.infoMode === 'routines');
+  classes.toggle('grokbot-subpage-computer', overview && phone.infoMode === 'computer');
 }
 
 function openInfoSubpage(mode, { focusName = false } = {}) {
   const pane = document.querySelector('.sand-info-pane[data-open="true"]');
   if (!pane) return;
   phone.infoMode = mode;
+  phone.infoReturn = null;
   if (mode === 'library') phone.libraryDialogSeen = false;
   const keepHub = mode === 'library';
   document.documentElement.classList.toggle('grokbot-bot-profile-open', keepHub);
@@ -1051,6 +1059,14 @@ function installPhone() {
         return;
       }
     }
+    if (!phone.bypassCapture && (phone.infoMode === 'routines' || phone.infoMode === 'computer')
+      && event.target.closest('.sand-info-pane__top:not(:has(.sand-info-pane__back)) .sand-info-pane__actions > button:not(:last-child)')) {
+      // The gear on the Routines / Computer page opens the Bot's Settings; Back returns here.
+      phone.infoReturn = phone.infoMode;
+      phone.infoMode = 'edit';
+      syncSubpageClasses();
+      return;
+    }
     if (!phone.bypassCapture && phone.infoMode !== 'profile') {
       const subpageBack = event.target.closest('.sand-info-pane__back button')
         || event.target.closest('.sand-info-pane__top:not(:has(.sand-info-pane__back)) .sand-info-pane__actions > button:last-child');
@@ -1058,7 +1074,9 @@ function installPhone() {
         event.preventDefault();
         event.stopPropagation();
         const prevMode = phone.infoMode;
-        phone.infoMode = 'profile';
+        const returnMode = prevMode === 'edit' ? phone.infoReturn : null;
+        phone.infoReturn = null;
+        phone.infoMode = returnMode ?? 'profile';
         if (prevMode === 'edit' || prevMode === 'library') {
           runBypassed(() => {
             const pane = document.querySelector('.sand-info-pane[data-open="true"]');
@@ -1070,6 +1088,13 @@ function installPhone() {
             }
           });
         }
+        // Numbers on the hub (routines switched on or off meanwhile) are read again.
+        const agentId = phone.agent || currentAgentId();
+        if (agentId && !returnMode) {
+          getAgentProfileEntry(agentId).loadedFor = '';
+          refreshBotProfileData(agentId);
+        }
+        requestAnimationFrame(renderBotProfile);
         renderBotProfile();
         return;
       }

@@ -694,3 +694,10 @@ test('boot reads give up after a bounded wait instead of holding the interface b
   await assert.rejects(gateway.command('listAgents'), /Timed out/);
   assert.deepEqual(seen, ['/api/getHostSettings', '/api/getMcpState', '/api/listAgents']);
 });
+
+test('the hub counts the Bot\'s switched-on routines, not its skills, and a paused routine is not counted', () => {
+  const { countActiveRoutines } = client.layout;
+  assert.equal(countActiveRoutines([]), 0);
+  assert.equal(countActiveRoutines([{ id: 'a', isEnabled: false }, { id: 'b', isEnabled: true }]), 1);
+  assert.equal(countActiveRoutines([{ id: 'a', isEnabled: true }, { id: 'b' }, null, { id: 'c', paused: true }]), 2);
+});
