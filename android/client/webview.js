@@ -19,8 +19,9 @@ export function mapDesktopSource(src, { hostOrigin, vncOrigin, tailcat = false, 
     const loopbackTailcat = isTailcat && url.protocol === 'http:' && url.hostname === '127.0.0.1';
     if ((!known.includes(url.origin) && !loopbackTailcat) || !/^\/vnc\/(desktop|fork)\//.test(url.pathname)) return null;
     const local = new URL(url.pathname + url.search, vncOrigin);
-    // The page is plain HTTP on the phone even when the Host itself uses HTTPS.
-    local.searchParams.set('encrypt', '0');
+    // The page is plain HTTP on the phone even when the Host itself uses HTTPS. The web client
+    // loads the view from the Host itself, whose address already sets the right value.
+    if (local.protocol === 'http:') local.searchParams.set('encrypt', '0');
     return local.href;
   } catch {
     return null;

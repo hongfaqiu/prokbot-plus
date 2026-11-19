@@ -116,6 +116,25 @@ function openAgent(id) {
   void native('ready').catch(() => {});
 }
 
+/**
+ * Opens a Bot from a notification or link at start-up. The interface drops a focus request
+ * that arrives before its Bot list, so this waits for the first row; a Bot that no longer
+ * exists stays closed instead of opening an empty conversation.
+ */
+async function openListedAgent(id) {
+  const agents = await gateway.command('listAgents').catch(() => null);
+  if (Array.isArray(agents) && !agents.some(agent => agent?.id === id)) return;
+  await new Promise(resolve => {
+    const listed = () => document.querySelector('[data-agent-id]');
+    if (listed()) return resolve();
+    const observer = new MutationObserver(() => { if (listed()) done(); });
+    const timer = setTimeout(done, 15000);
+    function done() { observer.disconnect(); clearTimeout(timer); resolve(); }
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+  });
+  setTimeout(() => { showConversation(); emit('focus-agent', { id }); }, 0);
+}
+
 function backgroundColor() {
   const parse = value => /^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)$/.exec(value ?? '');
   for (const element of [document.querySelector('#root > *'), document.body, document.documentElement]) {
@@ -145,14 +164,15 @@ const services = createServices({
   reconnectStreams: () => gateway.reconnectStreams(),
   systemDark: () => systemDark,
   applyChrome,
-  showConnection: () => { location.assign('/app/client/connect.html'); return null; },
+  // The web client (web/client) runs this bridge too and has its own sign-in page.
+  showConnection: () => { location.assign(androidBoot.connectPage ?? '/app/client/connect.html'); return null; },
   disconnect: async () => { await native('disconnect'); return null; },
   deepLinksReady: async () => {
     deepLinksReady = true;
     const fromShell = await native('ready').then(value => value.pendingAgent).catch(() => null);
     const id = fromShell ?? pendingAgent;
     pendingAgent = null;
-    if (id) setTimeout(() => { showConversation(); emit('focus-agent', { id }); }, 0);
+    if (id) void openListedAgent(id);
     return null;
   },
   voicePreferenceChanged: enabled => {
@@ -414,7 +434,7 @@ if (typeof document.addEventListener === 'function') {
 }
 // The Host lists unnamed desktop clients as Macs; report this device once per session.
 void gateway.request('/local/device', {
-  kind: 'desktop', clientKind: 'android', appVersion: androidBoot.appVersion,
+  kind: 'desktop', clientKind: androidBoot.clientKind ?? 'android', appVersion: androidBoot.appVersion,
   ...(androidBoot.bundleId ? { bundleId: androidBoot.bundleId } : {}),
   foreground: focused,
 }, undefined, 'PUT').catch(() => {});

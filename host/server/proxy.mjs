@@ -194,6 +194,7 @@ export function proxyHttp(
     token,
     rewrite,
     ticketCookie,
+    transformHtml,
     sseKeepaliveMs = DEFAULT_SSE_KEEPALIVE_MS,
   },
 ) {
@@ -231,10 +232,29 @@ export function proxyHttp(
       Number.isFinite(keepaliveDelay) &&
       keepaliveDelay > 0 &&
       keepaliveDelay <= MAX_TIMEOUT_MS;
-    const headers = responseHeaders(incoming.headers, json || sse || keepalive);
+    // A small page whose markup changes on the way, such as the web client's computer view.
+    const html = transformHtml && incoming.statusCode === 200 && type.includes("text/html");
+    const headers = responseHeaders(incoming.headers, json || sse || keepalive || html);
     if (ticketCookie) headers["set-cookie"] = ticketCookie;
     if (isSse) headers["x-accel-buffering"] = "no";
-    if (json) {
+    if (html) {
+      const chunks = [];
+      let size = 0;
+      incoming.on("data", (chunk) => {
+        size += chunk.length;
+        if (size > 4 * 1024 * 1024) {
+          incoming.destroy();
+          sendJson(response, 502, { error: "Host 响应内容过大" });
+        } else chunks.push(chunk);
+      });
+      incoming.on("end", () => {
+        if (response.headersSent || response.destroyed) return;
+        const body = Buffer.from(transformHtml(Buffer.concat(chunks).toString("utf8")));
+        response.writeHead(200, { ...headers, "content-length": body.length });
+        response.end(body);
+      });
+      incoming.on("error", () => sendJson(response, 502, { error: "Host 响应中断" }));
+    } else if (json) {
       const chunks = [];
       let size = 0;
       incoming.on("data", (chunk) => {

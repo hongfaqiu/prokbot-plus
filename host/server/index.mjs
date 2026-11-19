@@ -58,6 +58,7 @@ import { DeviceConnections, proxyHttp, proxyWebSocket } from "./proxy.mjs";
 import { proxyLocalExec } from "./local-exec-proxy.mjs";
 import { handleUpdateProxy } from "./update-proxy.mjs";
 import { VncTickets, vncPath, normalizeVncUpgradeUrl } from "./vnc.mjs";
+import { WebClient, rawBody, webManifest } from "./web-client.mjs";
 import {
   adminMutation,
   bearer,
@@ -75,7 +76,7 @@ import {
 
 const publicDir = fileURLToPath(new URL("./public/", import.meta.url));
 const assetTypes = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml" };
-const pages = new Map([["/", "index.html"], ["/admin", "index.html"], ["/connectors/result", "connector-result.html"]]);
+const pages = new Map([["/", "index.html"], ["/admin", "index.html"], ["/connectors/result", "connector-result.html"], ["/web/login", "web-login.html"]]);
 // Admin assets are served from a fixed listing taken at startup.
 const publicAssets = new Set(readdirSync(publicDir).filter((name) => [".js", ".css", ".svg"].includes(extname(name))));
 const adminCookie = "grokbot_admin";
@@ -150,6 +151,7 @@ export async function createSelfHostServer(options = {}) {
     ),
   };
   const auth = await new Auth(dataDir, options.authOptions).load();
+  const webClient = await new WebClient(dataDir, { auth }).load();
   const models = new Models(dataDir, {
     filename: options.modelFile ?? process.env.GROKBOT_MODEL_ENV,
   });
@@ -188,7 +190,7 @@ export async function createSelfHostServer(options = {}) {
   const desktopCapabilities = new DesktopCapabilities({ authenticate: device, connections, internalToken, enabled: () => harness.current().macComputer });
   const browserProviders = new DesktopBrowserProviders({ authenticate: device, connections, hostUrl, internalToken, enabled: key => harness.current()[key] });
   let executionRevision = executionNode.active()?.revision;
-  const limiter = new RateLimit();
+  const limiter = options.rateLimit ?? new RateLimit();
   const usage = timeZone => {
     try { new Intl.DateTimeFormat('en', { timeZone }).format(); }
     catch { throw new HttpError(400, 'Invalid time zone'); }
@@ -197,8 +199,10 @@ export async function createSelfHostServer(options = {}) {
   const sockets = new Set();
   function device(request) {
     check(federation.role() === 'primary', 403, 'Connect to the primary Host');
-    const found = auth.authenticate(bearer(request));
-    check(found, 401, "设备凭证无效，请重新配对");
+    // The web client signs in with a cookie instead of a bearer token (web-client.mjs).
+    const browser = webClient.deviceToken(request, request.grokbotOrigin);
+    const found = auth.authenticate(browser ?? bearer(request));
+    check(found && (!browser || found.platform === "web"), 401, "设备凭证无效，请重新配对");
     void auth.touch(found.id).catch(() => {});
     return found;
   }
@@ -258,6 +262,68 @@ export async function createSelfHostServer(options = {}) {
       ticketCookie: `grokbot_vnc_${route.slot}=${ticket}; Path=/vnc/${route.slot}/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(tickets.ttlMs / 1000)}${origin.startsWith("https:") ? "; Secure" : ""}`,
     };
   }
+  async function revokeDevice(id) {
+    await auth.revoke(id);
+    await push.revoke(id);
+    tickets.revoke(id);
+    connections.revoke(id);
+  }
+  /** Sign-in, sign-out and the bundle files of the web client (web-client.mjs); /web/login is a public page. */
+  async function webRoutes(request, response, path, origin, url) {
+    const method = request.method;
+    const fromPage = () => check(request.headers["x-grokbot-web"] === "1" &&
+      (!request.headers.origin || request.headers.origin === origin), 403, "请从网页版登录页操作");
+    if (method === "GET" && path === "/web/api/session") {
+      const signedIn = webClient.browserDevice(request), status = webClient.status();
+      return sendJson(response, 200, { available: status.available, rendererVersion: status.rendererVersion,
+        paired: Boolean(signedIn), deviceName: signedIn?.device.name ?? null, secure: origin.startsWith("https:") });
+    }
+    if (method === "POST" && path === "/web/api/pair") {
+      check(federation.role() === "primary", 403, "Connect to the primary Host");
+      fromPage();
+      check(webClient.available, 404, "网页版未启用");
+      limiter.check(`pair:${request.socket.remoteAddress}`, 6);
+      limiter.check("pair:global", 60);
+      const { pairingKey, deviceName } = await jsonBody(request);
+      const previous = webClient.browserDevice(request);
+      const result = await auth.pair({ pairingKey, deviceName }, { web: true });
+      // Signing in again replaces this browser's earlier device instead of leaving it behind.
+      if (previous) await revokeDevice(previous.device.id);
+      response.setHeader("set-cookie", webClient.sessionCookie(result.token, origin));
+      return sendJson(response, 201, { ok: true, deviceId: result.deviceId });
+    }
+    if (method === "POST" && path === "/web/api/logout") {
+      fromPage();
+      const signedIn = webClient.browserDevice(request);
+      if (signedIn) await revokeDevice(signedIn.device.id);
+      response.setHeader("set-cookie", webClient.sessionCookie("", origin));
+      return sendJson(response, 200, { ok: true });
+    }
+    if (method === "GET" && path === "/web/manifest.webmanifest") {
+      check(webClient.available, 404, "网页版未启用");
+      response.writeHead(200, { "content-type": "application/manifest+json; charset=utf-8" });
+      return response.end(JSON.stringify(webManifest()));
+    }
+    if (["GET", "HEAD"].includes(method) && (path === "/web" || path === "/web/")) {
+      response.writeHead(302, { location: `${webClient.browserDevice(request) ? "/web/renderer/index.html" : "/web/login"}${url.search}` });
+      return response.end();
+    }
+    const file = /^\/web\/((?:renderer|client)\/.+)$/.exec(path);
+    if (file && ["GET", "HEAD"].includes(method)) {
+      let name = null;
+      try { name = decodeURIComponent(file[1]); } catch {}
+      check(name && webClient.has(name), 404, "文件不存在");
+      const signedIn = webClient.browserDevice(request);
+      if (!signedIn && name === "renderer/index.html") {
+        response.writeHead(302, { location: `/web/login${url.search}` });
+        return response.end();
+      }
+      check(signedIn, 401, "请先登录网页版");
+      void auth.touch(signedIn.device.id).catch(() => {});
+      return webClient.serve(request, response, name);
+    }
+    throw new HttpError(404, "页面不存在");
+  }
   async function hostStatus() {
     try {
       const result = await fetch(new URL("/api/listAgents", hostUrl), {
@@ -298,11 +364,9 @@ export async function createSelfHostServer(options = {}) {
     validateAgentId(agentId);
     const status = await hostStatus();
     check(status.connected, 503, "Host 暂不可用，无法读取 Bot 资料库");
-    check(
-      status.agents.some((agent) => agent.id === agentId),
-      404,
-      "Bot 不存在",
-    );
+    const agent = status.agents.find((item) => item.id === agentId);
+    check(agent, 404, "Bot 不存在");
+    return agent;
   }
   async function adminRoutes(request, response, path, origin) {
     const method = request.method;
@@ -386,6 +450,7 @@ export async function createSelfHostServer(options = {}) {
           process.env.GROKBOT_REQUIRE_EXECUTION_NODE === '1' && !executionNode.store.value.config.enabled },
         devices: push.devices(),
         pairingKeys: auth.pairingKeys(),
+        webClient: webClient.status(),
         notifications: {
           ...notificationSettings.current(),
           count: notifications.store.value.items.length,
@@ -429,8 +494,37 @@ export async function createSelfHostServer(options = {}) {
         await models.test(await jsonBody(request)),
       );
     }
+    const summarize = /^\/admin\/api\/agents\/([a-f0-9-]{1,128})\/summarize$/.exec(path);
+    if (method === 'POST' && summarize) {
+      const agent = await verifyAgent(summarize[1]);
+      check(!agent.isRunning, 409, 'Bot 正在运行，请在任务结束后再压缩');
+      limiter.check(`manual-summary:${summarize[1]}`, 4, 10 * 60_000);
+      const result = await internalHostClient(hostUrl, internalToken)('localApplicationRpc', {
+        action: 'grokbot.manual-summary', agentId: summarize[1],
+      });
+      return sendJson(response, 200, { ...result, message: '上下文已压缩' });
+    }
     if (method === "POST" && path === "/admin/api/pairing-keys")
       return sendJson(response, 201, await auth.createPairing());
+    if (path === "/admin/api/web-client") {
+      if (method === "GET") return sendJson(response, 200, webClient.status());
+      if (method === "PUT") {
+        check(String(request.headers["content-type"] ?? "").split(";")[0].trim() === "application/zip", 415, "请上传 ZIP 格式的网页版界面包");
+        return sendJson(response, 200, await webClient.install(await rawBody(request)));
+      }
+      if (method === "PATCH") return sendJson(response, 200, await webClient.setEnabled((await jsonBody(request)).enabled));
+      if (method === "DELETE") return sendJson(response, 200, await webClient.remove());
+    }
+    if (method === "POST" && path === "/admin/api/web-client/open") {
+      // Opens the web client in the administrator's own browser without a pairing code.
+      check(webClient.available, 409, "请先上传并启用网页版");
+      const { deviceName } = await jsonBody(request);
+      // A browser that is already signed in keeps its device instead of gaining another.
+      if (webClient.browserDevice(request)) return sendJson(response, 200, { ok: true, url: "/web/" });
+      const result = await auth.addWebDevice(typeof deviceName === "string" && deviceName.trim() ? deviceName : "网页版");
+      response.setHeader("set-cookie", webClient.sessionCookie(result.token, origin));
+      return sendJson(response, 201, { ok: true, url: "/web/" });
+    }
     const deviceName = /^\/admin\/api\/devices\/([a-f0-9-]{36})$/.exec(path);
     if (method === "PATCH" && deviceName) {
       const body = await jsonBody(request);
@@ -440,10 +534,7 @@ export async function createSelfHostServer(options = {}) {
       path,
     );
     if (method === "POST" && revoke) {
-      await auth.revoke(revoke[1]);
-      await push.revoke(revoke[1]);
-      tickets.revoke(revoke[1]);
-      connections.revoke(revoke[1]);
+      await revokeDevice(revoke[1]);
       return sendJson(response, 200, { ok: true });
     }
     if (path === '/admin/api/notification-settings' && ['GET', 'PUT'].includes(method))
@@ -488,9 +579,17 @@ export async function createSelfHostServer(options = {}) {
     const path = request.url.split("?")[0];
     const origin = requestOrigin(request);
     delete request.headers['x-grokbot-tailcat-ingress'];
+    request.grokbotOrigin = origin;
     const url = new URL(request.url, origin);
     if (path.startsWith("/admin/api/"))
       return adminRoutes(request, response, path, origin);
+    if ((path === "/web" || path.startsWith("/web/")) && path !== "/web/login")
+      return webRoutes(request, response, path, origin, url);
+    if (path === "/local-client/icon.png" && request.method === "GET") {
+      // The desktop settings pages load the program icon from here; the web client serves its own.
+      check(webClient.browserDevice(request) && webClient.has("client/icon.png"), 404, "页面不存在");
+      return webClient.serve(request, response, "client/icon.png");
+    }
     if (await mediaInternal(request, response, path, { internalToken, mediaServices, webServices })) return;
     if (request.method === 'POST' && ['/federation/v1/pair', '/federation/v1/sync', '/federation/v1/revoke'].includes(path)) {
       limiter.check(`federation:${request.socket.remoteAddress}`, 120);
@@ -629,9 +728,21 @@ export async function createSelfHostServer(options = {}) {
     }
     if (path.startsWith("/vnc/")) {
       check(["GET", "HEAD"].includes(request.method), 405, "不支持的请求方法");
+      // The web client's computer view runs the bridge the Android shell injects (android/client/vnc-bridge.js).
+      const script = /^\/vnc\/(desktop|fork)\/__grokbot-(vnc-bridge|vnc-preload)\.js$/.exec(path);
+      if (script) {
+        const value = tickets.validate(cookie(request, `grokbot_vnc_${script[1]}`), script[1]);
+        check(value && webClient.available && auth.device(value.deviceId)?.platform === "web", 401, "桌面访问票据已失效，请重新打开电脑预览");
+        const body = await webClient.vncScript(script[2], origin);
+        response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cross-origin-resource-policy": "same-origin" });
+        return response.end(request.method === "HEAD" ? undefined : body);
+      }
       const access = vncAccess(request, url, path, origin);
       connections.track(access.deviceId, response);
-      return proxyHttp(request, response, access);
+      const page = request.method === "GET" && /^\/vnc\/(desktop|fork)\/vnc(_lite|_auto)?\.html$/.test(path);
+      const web = page && webClient.available && auth.device(access.deviceId)?.platform === "web";
+      return proxyHttp(request, response, web
+        ? { ...access, transformHtml: html => WebClient.injectVncBridge(html, path.slice(0, path.lastIndexOf("/"))) } : access);
     }
     if (await desktopCapabilities.route(request, response, path)) return;
     if (await browserProviders.route(request, response, path)) return;
@@ -838,6 +949,7 @@ export async function createSelfHostServer(options = {}) {
       );
       const origin = requestOrigin(request);
       delete request.headers['x-grokbot-tailcat-ingress'];
+      request.grokbotOrigin = origin;
       const url = new URL(request.url, origin);
       check(federation.role() === 'primary', 403, 'Connect to the primary Host');
       if (url.pathname === '/local/voice/realtime') return voice.upgrade(request, socket, head);
@@ -875,6 +987,7 @@ export async function createSelfHostServer(options = {}) {
     tickets,
     library,
     profile,
+    webClient,
     dataDir,
     async start(
       port = Number(process.env.GROKBOT_PORT ?? 8000),
@@ -919,6 +1032,7 @@ export async function createSelfHostServer(options = {}) {
         automationWebhooks.store.tail,
         sharing.store.tail,
         mediaSettings.store.tail, webSettings.store.tail, mediaServices.store.tail,
+        webClient.store.tail, webClient.installing,
       ]);
     },
   };

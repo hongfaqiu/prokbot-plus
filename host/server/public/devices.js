@@ -4,7 +4,7 @@ import { icon } from './icons.js';
 import { createPushEditor } from './push.js';
 import { createNotifications } from './notifications.js';
 
-const kinds = { iphone: 'iPhone', ipad: 'iPad', mac: 'Mac', windows: 'Windows', android: 'Android', desktop: '电脑', ios: 'iPhone / iPad' };
+const kinds = { iphone: 'iPhone', ipad: 'iPad', mac: 'Mac', windows: 'Windows', android: 'Android', web: '网页版', desktop: '电脑', ios: 'iPhone / iPad' };
 const permissions = { authorized: '已允许', granted: '已允许', provisional: '临时允许', ephemeral: '临时允许', denied: '已拒绝',
   notDetermined: '尚未询问', not_determined: '尚未询问', unknown: '尚未报告' };
 
@@ -111,7 +111,7 @@ export function createDevices(context) {
         }) },
       ]));
     }
-    const row = item({ tile: icon('devices'), title: device.name, badges, meta, actions });
+    const row = item({ icon: 'devices', title: device.name, badges, meta, actions });
     row.classList.add('device-row'); if (device.revokedAt) row.classList.add('revoked');
     row.querySelector('.item-title span').dataset.private = '';
     for (const error of [notice.lastError, notice.registrationError].filter(Boolean)) row.querySelector('.item-copy').append(node('p', 'error', error));
