@@ -11,6 +11,7 @@ services:
       GROKBOT_BOX_HOST: box
       GROKBOT_VNC_URL: http://box:6080
       GROKBOT_FORK_VNC_URL: http://box:6081
+      GROKBOT_DEFAULT_MACHINE_ID: ${GROKBOT_DEFAULT_MACHINE_ID:-mac-90e72c8d-7b50-4365-9273-9999efe705f1}
       SAND_BOX_MAX_WINDOWS: ${SAND_BOX_MAX_WINDOWS:-100}
       TZ: ${TZ:-Asia/Singapore}
     volumes:

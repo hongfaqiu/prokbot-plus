@@ -8,7 +8,7 @@ import { installHostNetworkBoundary } from './host-network.mjs';
 import { loadRecoveredHostCore } from './recovered-host-core.mjs';
 import { prepareHostReliability } from './reliability/prepare.mjs';
 import { withLibraryCleanup } from './host-library-files.mjs';
-import { observeHostComputers } from './host-computers.mjs';
+import { installDefaultMachineRouting, observeHostComputers } from './host-computers.mjs';
 import { loadExecutionNode, connectExecutionNode } from '../server/execution-node.mjs';
 import { writePrivate } from '../server/storage.mjs';
 import { decorateLocalSharingApi } from './sharing-import.mjs';
@@ -92,7 +92,12 @@ try {
   } catch (error) {
     console.warn('[local-host] failed to enable multi-machine local-exec routing:', error?.message ?? error);
   }
-  computers = observeHostComputers(host.getLocalExecBridge());
+  const localExecBridge = host.getLocalExecBridge();
+  const defaultMachineId = installDefaultMachineRouting(localExecBridge, process.env.GROKBOT_DEFAULT_MACHINE_ID);
+  if (defaultMachineId) {
+    console.log(`[local-host] default local-exec machine: ${defaultMachineId}`);
+  }
+  computers = observeHostComputers(localExecBridge);
   gateway = await library.startGatewayServer({
     api: decorateLocalSharingApi({ api: { ...withLibraryCleanup(host.getApi(), host, library), localApplicationRpc: args => host.requireHostExtensions().api('mcp').applicationRpc(args) }, host }), subscribe: listener => host.subscribe(listener),
     getHealth: () => host.getHealth(), startedAt: host.startedAt,
